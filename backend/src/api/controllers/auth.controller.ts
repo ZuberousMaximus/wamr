@@ -77,10 +77,18 @@ export class AuthController {
         username: user.username,
       });
 
-      // Set HTTP-only cookie (24-hour expiry)
+      // Set HTTP-only cookie (24-hour expiry).
+      //
+      // `secure` follows the actual request protocol rather than NODE_ENV.
+      // Browsers refuse to store a Secure cookie delivered over plain http, so
+      // keying it off NODE_ENV meant a production container reached at
+      // http://SERVER_IP:9002 handed out a cookie the browser dropped - taking
+      // REST auth and the Socket.IO handshake with it. `trust proxy` is enabled,
+      // so req.secure is true behind an HTTPS reverse proxy and false on a
+      // plain-HTTP LAN address, which is exactly the distinction that matters.
       res.cookie('wamr-auth-token', token, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
+        secure: req.secure,
         sameSite: 'strict',
         maxAge: 24 * 60 * 60 * 1000, // 24 hours
       });
@@ -109,7 +117,11 @@ export class AuthController {
   async logout(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       // Clear auth cookie
-      res.clearCookie('wamr-auth-token');
+      res.clearCookie('wamr-auth-token', {
+        httpOnly: true,
+        secure: req.secure,
+        sameSite: 'strict',
+      });
 
       const user = (req as any).user as JWTPayload | undefined;
       if (user) {

@@ -22,6 +22,12 @@ import { requestApprovalService } from './request-approval.service.js';
 import { settingRepository } from '../../repositories/setting.repository.js';
 
 /**
+ * Upper bound on a merged result list, so searching two spellings cannot
+ * produce a WhatsApp message twice as long as a normal one.
+ */
+const MAX_MERGED_RESULTS = 10;
+
+/**
  * Conversation service response
  */
 export interface ConversationResponse {
@@ -432,6 +438,39 @@ export class ConversationService {
    * Perform media search and handle results
    */
   /**
+   * Identity for a result across two different searches. Falls back to
+   * title+year when the catalogue gives us no external id.
+   */
+  private resultKey(result: NormalizedResult): string {
+    if (result.tmdbId != null) return `tmdb:${result.mediaType}:${result.tmdbId}`;
+    if (result.tvdbId != null) return `tvdb:${result.mediaType}:${result.tvdbId}`;
+    return `title:${result.mediaType}:${result.title.toLowerCase()}:${result.year ?? ''}`;
+  }
+
+  /**
+   * Concatenate two result sets, `first` taking precedence, dropping anything
+   * that appears in both and capping the combined list so the WhatsApp message
+   * stays readable.
+   */
+  private mergeResults(first: NormalizedResult[], second: NormalizedResult[]): NormalizedResult[] {
+    const seen = new Set<string>();
+    const merged: NormalizedResult[] = [];
+
+    for (const result of [...first, ...second]) {
+      const key = this.resultKey(result);
+
+      if (seen.has(key)) continue;
+
+      seen.add(key);
+      merged.push(result);
+
+      if (merged.length >= MAX_MERGED_RESULTS) break;
+    }
+
+    return merged;
+  }
+
+  /**
    * Move results matching the requested year to the front, preserving the
    * catalogue's own ordering within each group. Ranking rather than filtering:
    * a user who misremembers the year still sees the right title, just lower.
@@ -478,18 +517,28 @@ export class ConversationService {
         }
       }
 
-      // The user's literal wording found nothing. Retry once with the canonical
-      // title the LLM suggested, which rescues misspellings and transliterations
-      // the catalogue search cannot match on its own ("Coffee with Karan" ->
-      // "Koffee with Karan"). Only runs on a miss, so it can never displace a
-      // result the original query would have found; a wrong suggestion simply
-      // returns nothing, exactly as today.
-      if (searchResult.results.length === 0 && alternateQuery) {
+      // Search the canonical title the LLM suggested as well, and put its hits
+      // first. This deliberately runs even when the literal query DID return
+      // results: a catalogue search can return plenty of matches and still miss
+      // the thing the user meant - "vision quest" returns the 1985 film while
+      // the series is "VisionQuest" - so gating this on an empty result set
+      // would never fire for the case that needs it most. Results are merged,
+      // not replaced, so if the suggestion is wrong the user still sees
+      // everything their own wording found, just below.
+      if (alternateQuery) {
         logger.info(
           { sessionId, query, alternateQuery },
-          'No results for the literal query, retrying with the suggested title'
+          'Also searching the suggested canonical title'
         );
-        searchResult = await mediaSearchService.search(mediaType, alternateQuery, true);
+
+        const corrected = await mediaSearchService.search(mediaType, alternateQuery, true);
+
+        if (corrected.results.length > 0) {
+          searchResult = {
+            ...searchResult,
+            results: this.mergeResults(corrected.results, searchResult.results),
+          };
+        }
       }
 
       logger.info(

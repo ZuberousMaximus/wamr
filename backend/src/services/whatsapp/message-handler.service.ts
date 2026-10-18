@@ -14,6 +14,8 @@ import { whatsappClientService } from './whatsapp-client.service';
 import { whatsappConnectionRepository } from '../../repositories/whatsapp-connection.repository';
 import { conversationSessionRepository } from '../../repositories/conversation-session.repository';
 import { adminNotificationService } from '../notifications/admin-notification.service';
+import { settingRepository } from '../../repositories/setting.repository';
+import { contactRepository } from '../../repositories/contact.repository';
 
 /**
  * Service for handling incoming WhatsApp messages
@@ -55,10 +57,68 @@ class MessageHandlerService {
    * Check if message should be processed based on filter configuration
    * Returns { shouldProcess, cleanedMessage }
    */
+  /**
+   * Whether a sender may be answered at all.
+   *
+   * When the `contactAllowlistEnabled` setting is on, only numbers present in
+   * Contacts get a reply; everyone else is ignored in silence (no "you are not
+   * authorised" response, which would still confirm the number is a bot).
+   * The setting is off by default, so existing deployments are unaffected.
+   */
+  private async isSenderAllowed(phoneNumberHash: string): Promise<boolean> {
+    let enabled = false;
+
+    try {
+      const setting = await settingRepository.findByKey('contactAllowlistEnabled');
+      enabled = setting?.value === true;
+    } catch (error) {
+      // Can't tell whether the feature is even on - preserve default behaviour
+      // rather than silencing a bot that never opted in.
+      logger.error({ error }, 'Could not read contact allow-list setting, allowing message');
+      return true;
+    }
+
+    if (!enabled) {
+      return true;
+    }
+
+    try {
+      const contact = await contactRepository.findByPhoneHash(phoneNumberHash);
+
+      if (!contact) {
+        logger.info(
+          { phoneHash: phoneNumberHash.slice(-4) },
+          'Ignoring message: sender is not in Contacts'
+        );
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      // Fail closed: an allow-list that opens up when the lookup fails is not
+      // an allow-list. The admin sees the error in the logs.
+      logger.error(
+        { error, phoneHash: phoneNumberHash.slice(-4) },
+        'Contact lookup failed while allow-list is enabled, ignoring message'
+      );
+      return false;
+    }
+  }
+
   private async shouldProcessMessage(
     message: string,
-    phoneNumberHash: string
+    phoneNumberHash: string,
+    isFromMe = false
   ): Promise<{ shouldProcess: boolean; cleanedMessage: string }> {
+    // Contact allow-list. Checked before everything else - including the
+    // interactive-session bypass below - so that removing someone from Contacts
+    // cuts off an in-flight conversation rather than letting it run to
+    // completion. Messages from the linked account itself are exempt, otherwise
+    // the owner would be locked out of their own bot.
+    if (!isFromMe && !(await this.isSenderAllowed(phoneNumberHash))) {
+      return { shouldProcess: false, cleanedMessage: message };
+    }
+
     try {
       // Check if user has an active session in interactive state
       // If so, bypass filter to allow selection responses
@@ -313,7 +373,8 @@ class MessageHandlerService {
       // Check if message should be processed based on filter configuration
       const { shouldProcess, cleanedMessage } = await this.shouldProcessMessage(
         messageBody,
-        phoneNumberHash
+        phoneNumberHash,
+        Boolean(message.key.fromMe)
       );
 
       if (!shouldProcess) {

@@ -117,6 +117,10 @@ export default function SettingsPage() {
   const [sendPostersViewOnce, setSendPostersViewOnce] = useState(false);
 
   // Request Quotas state
+  const [contactAllowlistEnabled, setContactAllowlistEnabled] = useState(false);
+  // Guards the sync effect below so opening Settings cannot briefly write the
+  // initial `false` back over a stored `true`.
+  const contactAllowlistLoaded = useRef(false);
   const [quotaEnabled, setQuotaEnabled] = useState(false);
   const [quotaGlobalMaxRequests, setQuotaGlobalMaxRequests] = useState(5);
   const [quotaGlobalWindowType, setQuotaGlobalWindowType] = useState<
@@ -170,6 +174,12 @@ export default function SettingsPage() {
         } else {
           await apiClient.put('/api/settings/sendPostersViewOnce', { value: false });
         }
+
+        // Load contact allow-list setting (absent means disabled)
+        if (settings['contactAllowlistEnabled'] !== undefined) {
+          setContactAllowlistEnabled(Boolean(settings['contactAllowlistEnabled']));
+        }
+        contactAllowlistLoaded.current = true;
 
         // Load quota settings
         if (settings['quotaEnabled'] !== undefined) {
@@ -289,6 +299,23 @@ export default function SettingsPage() {
     };
     syncSendPostersViewOnce();
   }, [sendPostersViewOnce]);
+
+  // Sync the contact allow-list to the backend, but never before the stored
+  // value has been read - otherwise simply opening this page would disable it.
+  useEffect(() => {
+    if (!contactAllowlistLoaded.current) return;
+
+    const syncAllowlist = async () => {
+      try {
+        await apiClient.put('/api/settings/contactAllowlistEnabled', {
+          value: contactAllowlistEnabled,
+        });
+      } catch (error) {
+        console.error('Failed to sync contactAllowlistEnabled:', error);
+      }
+    };
+    syncAllowlist();
+  }, [contactAllowlistEnabled]);
 
   // Sync quota settings to backend
   useEffect(() => {
@@ -1088,6 +1115,21 @@ export default function SettingsPage() {
           <CardDescription>Limit how many requests each user can make</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label htmlFor="contact-allowlist">Only reply to saved contacts</Label>
+              <p className="text-sm text-muted-foreground">
+                Messages from numbers that are not in Contacts are ignored in silence. Recommended
+                if this WhatsApp number is also used personally.
+              </p>
+            </div>
+            <Switch
+              id="contact-allowlist"
+              checked={contactAllowlistEnabled}
+              onCheckedChange={setContactAllowlistEnabled}
+            />
+          </div>
+
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
               <Label htmlFor="quota-enabled">Enable Quotas</Label>

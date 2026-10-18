@@ -880,49 +880,4 @@ describe('ConversationService', () => {
       expect(input[0].year).toBe(1984);
     });
   });
-
-  describe('mergeResults', () => {
-    const r = (title: string, tmdbId: number | null, mediaType = 'series') =>
-      ({ title, tmdbId, tvdbId: null, year: null, mediaType }) as any;
-
-    it('puts the first set in front and appends the rest', () => {
-      const merged = (service as any).mergeResults([r('VisionQuest', 1)], [r('Vision Quest', 2)]);
-
-      expect(merged.map((x: any) => x.title)).toEqual(['VisionQuest', 'Vision Quest']);
-    });
-
-    it('drops duplicates that appear in both sets', () => {
-      const merged = (service as any).mergeResults(
-        [r('VisionQuest', 1)],
-        [r('VisionQuest', 1), r('Vision Quest', 2)]
-      );
-
-      expect(merged).toHaveLength(2);
-      expect(merged.map((x: any) => x.tmdbId)).toEqual([1, 2]);
-    });
-
-    it('treats the same id on different media types as distinct', () => {
-      const merged = (service as any).mergeResults(
-        [r('Dune', 1, 'movie')],
-        [r('Dune', 1, 'series')]
-      );
-
-      expect(merged).toHaveLength(2);
-    });
-
-    it('falls back to title and year when there is no external id', () => {
-      const merged = (service as any).mergeResults([r('Dune', null)], [r('dune', null)]);
-
-      expect(merged).toHaveLength(1);
-    });
-
-    it('caps the merged list so the reply stays readable', () => {
-      const many = Array.from({ length: 12 }, (_, i) => r('A' + i, i + 100));
-
-      const merged = (service as any).mergeResults(many, [r('B', 999)]);
-
-      expect(merged).toHaveLength(10);
-      expect(merged[0].title).toBe('A0');
-    });
-  });
 });

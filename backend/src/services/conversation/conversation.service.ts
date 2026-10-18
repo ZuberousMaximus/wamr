@@ -418,14 +418,11 @@ export class ConversationService {
     }
 
     // Perform search in background — results sent directly to user from performSearch()
-    this.performSearch(
-      session.id,
-      intent.mediaType,
-      intent.query,
-      intent.alternateQuery
-    ).catch((error) => {
-      logger.error({ sessionId: session.id, error }, 'Media search failed');
-    });
+    this.performSearch(session.id, intent.mediaType, intent.query, intent.alternateQuery).catch(
+      (error) => {
+        logger.error({ sessionId: session.id, error }, 'Media search failed');
+      }
+    );
 
     // Return empty message — the ack was already sent above, don't double-send
     return this.createResponse(session, '', 'SEARCHING');
@@ -440,9 +437,7 @@ export class ConversationService {
    * a user who misremembers the year still sees the right title, just lower.
    */
   private preferYear(results: NormalizedResult[], year: number): NormalizedResult[] {
-    return [...results].sort(
-      (a, b) => Number(b.year === year) - Number(a.year === year)
-    );
+    return [...results].sort((a, b) => Number(b.year === year) - Number(a.year === year));
   }
 
   private async performSearch(

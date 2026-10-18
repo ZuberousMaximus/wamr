@@ -29,6 +29,30 @@ jobs:
       - name: Check formatting
         run: npm run format:check
 
+  verify:
+    name: Typecheck & Test
+    runs-on: ubuntu-latest
+    # Deliberately independent of lint: a formatting complaint must not hide
+    # type errors or failing tests by skipping this job.
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run tests
+        run: npm run test
+
   build:
     name: Build
     runs-on: ubuntu-latest

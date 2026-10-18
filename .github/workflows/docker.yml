@@ -61,8 +61,9 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
-          progress: plain
+          # Unraid and virtually all self-hosted targets are x86-64. Emulated
+          # arm64 was the slow half of a ~30 minute build; drop it.
+          platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

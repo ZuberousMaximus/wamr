@@ -14,6 +14,13 @@ export interface IntentResult {
     | 'unknown';
   mediaType?: MediaType;
   query?: string;
+  /**
+   * Canonical spelling of the title when the LLM believes the user misspelled
+   * it ("Coffee with Karan" -> "Koffee with Karan"). Only ever used as a retry
+   * after the literal query returns no results, so a wrong guess costs nothing.
+   * The keyword parser never sets it.
+   */
+  alternateQuery?: string;
   selectionNumber?: number;
   confirmed?: boolean;
   seasons?: 'all' | number[];

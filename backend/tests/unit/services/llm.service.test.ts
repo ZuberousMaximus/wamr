@@ -52,6 +52,7 @@ function llmPayload(overrides: Record<string, unknown> = {}) {
     intent: 'unknown',
     mediaType: 'none',
     query: '',
+    correctedQuery: '',
     selectionNumber: 0,
     confirmed: false,
     allSeasons: false,
@@ -187,6 +188,57 @@ describe('LlmService', () => {
       const result = await new LlmService().parseIntent('Dune 2021');
 
       expect(result).toEqual({ intent: 'media_request', mediaType: 'both', query: 'Dune 2021' });
+    });
+
+    it('should carry a corrected title through as alternateQuery', async () => {
+      mockClient.post.mockResolvedValue(
+        completion(
+          llmPayload({
+            intent: 'media_request',
+            mediaType: 'series',
+            query: 'Coffee with Karan',
+            correctedQuery: 'Koffee with Karan',
+          })
+        )
+      );
+
+      const result = await new LlmService().parseIntent('add coffee with karan');
+
+      expect(result).toEqual({
+        intent: 'media_request',
+        mediaType: 'series',
+        query: 'Coffee with Karan',
+        alternateQuery: 'Koffee with Karan',
+      });
+    });
+
+    it('should drop a correction identical to the query', async () => {
+      mockClient.post.mockResolvedValue(
+        completion(
+          llmPayload({
+            intent: 'media_request',
+            mediaType: 'movie',
+            query: 'Dune',
+            correctedQuery: 'dune',
+          })
+        )
+      );
+
+      const result = await new LlmService().parseIntent('add Dune');
+
+      expect(result).not.toHaveProperty('alternateQuery');
+    });
+
+    it('should omit alternateQuery when no correction is offered', async () => {
+      mockClient.post.mockResolvedValue(
+        completion(
+          llmPayload({ intent: 'media_request', mediaType: 'movie', query: 'Dune' })
+        )
+      );
+
+      const result = await new LlmService().parseIntent('add Dune');
+
+      expect(result).not.toHaveProperty('alternateQuery');
     });
 
     it('should reject a media request with an unusable query', async () => {

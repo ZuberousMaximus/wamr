@@ -59,6 +59,7 @@ const llmIntentSchema = z.object({
   intent: z.enum(INTENT_VALUES),
   mediaType: z.enum(MEDIA_TYPE_VALUES),
   query: z.string(),
+  correctedQuery: z.string(),
   selectionNumber: z.number().int(),
   confirmed: z.boolean(),
   allSeasons: z.boolean(),
@@ -77,6 +78,7 @@ const RESPONSE_JSON_SCHEMA = {
     intent: { type: 'string', enum: INTENT_VALUES },
     mediaType: { type: 'string', enum: MEDIA_TYPE_VALUES },
     query: { type: 'string' },
+    correctedQuery: { type: 'string' },
     selectionNumber: { type: 'integer' },
     confirmed: { type: 'boolean' },
     allSeasons: { type: 'boolean' },
@@ -86,6 +88,7 @@ const RESPONSE_JSON_SCHEMA = {
     'intent',
     'mediaType',
     'query',
+    'correctedQuery',
     'selectionNumber',
     'confirmed',
     'allSeasons',
@@ -97,7 +100,7 @@ const SYSTEM_PROMPT = `You classify WhatsApp messages sent to a self-hosted medi
 The bot lets approved users ask for movies and TV shows, which are forwarded to Radarr, Sonarr, Overseerr or Jellyseerr.
 
 Classify the message into exactly one intent:
-- "media_request": the user is asking for a movie or show. Set "query" to just the title, with no request words ("add", "get", "download", "can you"). Keep any year the user gave, e.g. "Dune 2021". For a vague or descriptive request ("something scary", "the new Marvel one"), put the user's own descriptive words in "query" - do NOT guess a specific title, the bot runs a real catalogue search.
+- "media_request": the user is asking for a movie or show. Set "query" to just the title, with no request words ("add", "get", "download", "can you"). Keep any year the user gave, e.g. "Dune 2021". For a vague or descriptive request ("something scary", "the new Marvel one"), put the user's own descriptive words in "query".
 - "selection": the user is picking one of the numbered results the bot just listed. Set "selectionNumber" to that number.
 - "season_selection": the user is choosing TV seasons. Set "seasons" to the explicit list, expanding ranges ("1-3" becomes [1,2,3]). Set "allSeasons" true if they want every season.
 - "confirmation": a yes/no answer to the bot's confirmation question. Set "confirmed" true for yes, false for no.
@@ -110,7 +113,8 @@ Rules:
 - "mediaType": "movie" if clearly a film, "series" if clearly a TV show, "both" if unclear, "none" when the intent is not a media_request.
 - Use the conversation state to disambiguate: a bare number is a "selection" while the bot is awaiting a selection, and a "season_selection" while it is awaiting seasons.
 - Never invent a title the user did not reference.
-- Always return every field. Use "" for query, 0 for selectionNumber, false for booleans and [] for seasons when they do not apply.`;
+- "correctedQuery": your single best guess at the real title the user means, when "query" is unlikely to match a catalogue entry as written. Use it for misspellings and transliterations ("Coffee with Karan" -> "Koffee with Karan", "Seven" -> "Se7en"), and for descriptions of a specific work ("the show about the chemistry teacher who makes drugs" -> "Breaking Bad"). Leave it "" when the user's wording already looks like a searchable title, or when the request is a genuine open browse ("something scary tonight") with no one work in mind. Never put a guess in "query" itself - "query" always keeps the user's own wording, and correctedQuery is only tried if searching "query" finds nothing, so a wrong guess costs nothing.
+- Always return every field. Use "" for query and correctedQuery, 0 for selectionNumber, false for booleans and [] for seasons when they do not apply.`;
 
 /**
  * Human-readable description of the conversation state for the model
@@ -287,8 +291,17 @@ export class LlmService {
         }
 
         const mediaType: MediaType = data.mediaType === 'none' ? 'both' : data.mediaType;
+        const corrected = data.correctedQuery.trim();
 
-        return { intent: 'media_request', mediaType, query };
+        return {
+          intent: 'media_request',
+          mediaType,
+          query,
+          // Only worth keeping if it actually differs from what the user typed
+          ...(corrected.length >= 2 && corrected.toLowerCase() !== query.toLowerCase()
+            ? { alternateQuery: corrected }
+            : {}),
+        };
       }
 
       case 'selection': {

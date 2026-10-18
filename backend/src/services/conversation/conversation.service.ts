@@ -418,7 +418,12 @@ export class ConversationService {
     }
 
     // Perform search in background — results sent directly to user from performSearch()
-    this.performSearch(session.id, intent.mediaType, intent.query).catch((error) => {
+    this.performSearch(
+      session.id,
+      intent.mediaType,
+      intent.query,
+      intent.alternateQuery
+    ).catch((error) => {
       logger.error({ sessionId: session.id, error }, 'Media search failed');
     });
 
@@ -432,14 +437,29 @@ export class ConversationService {
   private async performSearch(
     sessionId: string,
     mediaType: 'movie' | 'series' | 'both',
-    query: string
+    query: string,
+    alternateQuery?: string
   ): Promise<void> {
     try {
       logger.debug({ sessionId, mediaType, query }, 'Executing media search');
 
       // Search for media - always search both types for better UX
       // This way "breaking bad" will find the TV series even if mediaType defaults to 'movie'
-      const searchResult = await mediaSearchService.search(mediaType, query, true);
+      let searchResult = await mediaSearchService.search(mediaType, query, true);
+
+      // The user's literal wording found nothing. Retry once with the canonical
+      // title the LLM suggested, which rescues misspellings and transliterations
+      // the catalogue search cannot match on its own ("Coffee with Karan" ->
+      // "Koffee with Karan"). Only runs on a miss, so it can never displace a
+      // result the original query would have found; a wrong suggestion simply
+      // returns nothing, exactly as today.
+      if (searchResult.results.length === 0 && alternateQuery) {
+        logger.info(
+          { sessionId, query, alternateQuery },
+          'No results for the literal query, retrying with the suggested title'
+        );
+        searchResult = await mediaSearchService.search(mediaType, alternateQuery, true);
+      }
 
       logger.info(
         {

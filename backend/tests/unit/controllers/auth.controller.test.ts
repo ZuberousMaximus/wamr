@@ -60,7 +60,9 @@ describe('AuthController', () => {
     vi.clearAllMocks();
     controller = new AuthController();
 
-    mockRequest = {};
+    // secure mirrors Express's req.secure: false for plain HTTP, true behind
+    // an HTTPS reverse proxy. The auth cookie's Secure flag follows it.
+    mockRequest = { secure: false };
     mockResponse = {
       status: vi.fn().mockReturnThis(),
       json: vi.fn().mockReturnThis(),
@@ -122,6 +124,38 @@ describe('AuthController', () => {
           message: 'Login successful',
         },
       });
+    });
+
+    it('should mark the auth cookie Secure when the request is HTTPS', async () => {
+      const mockUser = {
+        id: 1,
+        username: 'admin',
+        passwordHash: 'hashedpass',
+        createdAt: new Date(),
+        lastLoginAt: null,
+      };
+
+      mockRequest.body = { username: 'admin', password: 'password123' };
+      mockRequest.ip = '127.0.0.1';
+      mockRequest.secure = true;
+
+      (rateLimiterService.isAllowed as Mock).mockReturnValue(true);
+      (adminUserRepository.findByUsername as Mock).mockResolvedValue(mockUser);
+      (passwordService.verify as Mock).mockResolvedValue(true);
+      (authService.generateToken as Mock).mockReturnValue('jwt-token');
+      (adminUserRepository.update as Mock).mockResolvedValue(mockUser);
+
+      await controller.login(
+        mockRequest as Request,
+        mockResponse as Response,
+        mockNext as NextFunction
+      );
+
+      expect(mockResponse.cookie).toHaveBeenCalledWith(
+        'wamr-auth-token',
+        'jwt-token',
+        expect.objectContaining({ secure: true })
+      );
     });
 
     it('should return 429 when rate limit exceeded', async () => {
@@ -241,7 +275,11 @@ describe('AuthController', () => {
         mockNext as NextFunction
       );
 
-      expect(mockResponse.clearCookie).toHaveBeenCalledWith('wamr-auth-token');
+      expect(mockResponse.clearCookie).toHaveBeenCalledWith('wamr-auth-token', {
+        httpOnly: true,
+        secure: false,
+        sameSite: 'strict',
+      });
       expect(mockResponse.status).toHaveBeenCalledWith(200);
       expect(mockResponse.json).toHaveBeenCalledWith({
         success: true,
@@ -256,7 +294,11 @@ describe('AuthController', () => {
         mockNext as NextFunction
       );
 
-      expect(mockResponse.clearCookie).toHaveBeenCalledWith('wamr-auth-token');
+      expect(mockResponse.clearCookie).toHaveBeenCalledWith('wamr-auth-token', {
+        httpOnly: true,
+        secure: false,
+        sameSite: 'strict',
+      });
       expect(mockResponse.status).toHaveBeenCalledWith(200);
     });
 

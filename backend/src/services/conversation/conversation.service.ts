@@ -3,7 +3,7 @@ import { whatsappConnectionRepository } from '../../repositories/whatsapp-connec
 import { contactRepository } from '../../repositories/contact.repository.js';
 import { requestHistoryRepository } from '../../repositories/request-history.repository.js';
 import { broadcastRepository } from '../../repositories/broadcast.repository.js';
-import { IntentResult } from './intent-parser.js';
+import { intentParser, IntentResult } from './intent-parser.js';
 import { intentResolver } from './intent-resolver.js';
 import { stateMachine, StateMachineAction } from './state-machine.js';
 import {
@@ -434,6 +434,17 @@ export class ConversationService {
   /**
    * Perform media search and handle results
    */
+  /**
+   * Move results matching the requested year to the front, preserving the
+   * catalogue's own ordering within each group. Ranking rather than filtering:
+   * a user who misremembers the year still sees the right title, just lower.
+   */
+  private preferYear(results: NormalizedResult[], year: number): NormalizedResult[] {
+    return [...results].sort(
+      (a, b) => Number(b.year === year) - Number(a.year === year)
+    );
+  }
+
   private async performSearch(
     sessionId: string,
     mediaType: 'movie' | 'series' | 'both',
@@ -446,6 +457,31 @@ export class ConversationService {
       // Search for media - always search both types for better UX
       // This way "breaking bad" will find the TV series even if mediaType defaults to 'movie'
       let searchResult = await mediaSearchService.search(mediaType, query, true);
+
+      // Still nothing, and the user appended a year. The catalogue search
+      // matches the year as part of the title text, so "Dune 2021" finds
+      // nothing while "Dune" finds everything. Retry on the bare title and
+      // float exact-year matches to the top instead of filtering by them, so a
+      // mismatched year can never hide a result. Runs only after the literal
+      // query missed, which keeps titles that genuinely contain a year
+      // ("Blade Runner 2049") on their original, working path.
+      if (searchResult.results.length === 0) {
+        const { title, year } = intentParser.extractTitle(query);
+
+        if (year && title.length >= 2) {
+          logger.info(
+            { sessionId, query, title, year },
+            'No results for the literal query, retrying without the year'
+          );
+
+          const retry = await mediaSearchService.search(mediaType, title, true);
+
+          if (retry.results.length > 0) {
+            retry.results = this.preferYear(retry.results, year);
+            searchResult = retry;
+          }
+        }
+      }
 
       // The user's literal wording found nothing. Retry once with the canonical
       // title the LLM suggested, which rescues misspellings and transliterations

@@ -841,4 +841,43 @@ describe('ConversationService', () => {
       expect(result).toBeNull();
     });
   });
+
+  describe('preferYear', () => {
+    const r = (title: string, year: number | null) => ({ title, year }) as any;
+
+    it('moves matching-year results to the front', () => {
+      const ranked = (service as any).preferYear(
+        [r('Dune', 1984), r('Dune: Part Two', 2024), r('Dune', 2021)],
+        2021
+      );
+
+      expect(ranked[0]).toEqual(r('Dune', 2021));
+    });
+
+    it('keeps catalogue order within each group', () => {
+      const ranked = (service as any).preferYear(
+        [r('A', 1999), r('B', 2021), r('C', 1999), r('D', 2021)],
+        2021
+      );
+
+      expect(ranked.map((x: any) => x.title)).toEqual(['B', 'D', 'A', 'C']);
+    });
+
+    it('never drops results when no year matches', () => {
+      const input = [r('Dune', 1984), r('Dune', 2021)];
+
+      const ranked = (service as any).preferYear(input, 1965);
+
+      expect(ranked).toHaveLength(2);
+      expect(ranked.map((x: any) => x.year)).toEqual([1984, 2021]);
+    });
+
+    it('does not mutate the input array', () => {
+      const input = [r('Dune', 1984), r('Dune', 2021)];
+
+      (service as any).preferYear(input, 2021);
+
+      expect(input[0].year).toBe(1984);
+    });
+  });
 });

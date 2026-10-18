@@ -55,8 +55,18 @@ function createApp(): Express {
           objectSrc: ["'none'"],
           mediaSrc: ["'self'"],
           frameSrc: ["'none'"],
+          // Helmet enables upgrade-insecure-requests by default, which rewrites
+          // every http:// subresource to https://. WAMR serves plain HTTP, so on
+          // a LAN address (http://SERVER_IP:9002) that turns the JS and CSS
+          // requests into failed TLS handshakes and the UI renders blank.
+          // Behind an HTTPS reverse proxy the page is already https and its
+          // same-origin assets are too, so the directive buys nothing there.
+          upgradeInsecureRequests: null,
         },
       },
+      // Pointless over plain HTTP (browsers ignore it on an insecure origin) and
+      // the proxy owns this header when TLS is terminated upstream.
+      strictTransportSecurity: false,
       crossOriginEmbedderPolicy: false,
     })
   );

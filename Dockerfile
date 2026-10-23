@@ -2,7 +2,7 @@
 # Uses Node for both building and runtime (better-sqlite3 native bindings require Node.js ABI)
 
 # Build stage - Node for reliable npm install
-FROM node:20-slim AS builder
+FROM node:22-slim AS builder
 
 WORKDIR /app
 
@@ -45,24 +45,43 @@ ARG VITE_API_URL=/api
 ENV VITE_API_URL=${VITE_API_URL}
 RUN npm run build
 
-# Production stage - Node.js runtime (required for better-sqlite3 native bindings)
-FROM node:20-slim
+# Production deps stage - backend runtime dependencies only, straight from the lockfile,
+# so devDependencies (vitest, esbuild, eslint, etc.) never reach the runtime image
+FROM node:22-slim AS prod-deps
 
 WORKDIR /app
 
-# Install runtime deps (git for Baileys)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-  git ca-certificates \
-  && rm -rf /var/lib/apt/lists/* \
-  && git config --global url."https://github.com/".insteadOf ssh://git@github.com/ \
-  && git config --global url."https://github.com/".insteadOf git@github.com:
+  python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY package.json package-lock.json ./
+COPY patches ./patches
+COPY backend/package.json ./backend/
+COPY frontend/package.json ./frontend/
+
+# Scripts are skipped because the root postinstall needs patch-package, a devDependency;
+# native modules are rebuilt and the Baileys patch applied explicitly instead
+RUN npm ci --omit=dev --workspace=wamr-backend --include-workspace-root --ignore-scripts --legacy-peer-deps \
+  && npm rebuild better-sqlite3 bcrypt \
+  && npx --yes patch-package@8.0.1 \
+  && mkdir -p backend/node_modules \
+  && rm -rf ~/.npm
+
+# Production stage - Node.js runtime (required for better-sqlite3 native bindings)
+FROM node:22-slim
+
+WORKDIR /app
+
+# npm is only needed at build time; removing it drops its bundled dependencies from the image
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
 # Copy backend package.json (has "type": "module" needed for ESM runtime)
 COPY backend/package.json ./
 
-# Copy node_modules from builder (already compiled for Node.js ABI)
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/backend/node_modules ./backend_node_modules
+# Copy production node_modules (already compiled for Node.js ABI)
+COPY --from=prod-deps /app/node_modules ./node_modules
+COPY --from=prod-deps /app/backend/node_modules ./backend_node_modules
 
 # Merge backend node_modules into main node_modules (handle workspace hoisting)
 RUN cp -rn ./backend_node_modules/* ./node_modules/ 2>/dev/null || true \
@@ -74,8 +93,9 @@ COPY --from=builder /app/frontend/dist ./public
 COPY backend/drizzle ./drizzle
 COPY backend/drizzle.config.ts ./
 
-# Create directories for volumes
-RUN mkdir -p /app/.baileys_auth /app/data
+# Create directories for volumes, owned by Unraid's nobody:users (99:100)
+RUN mkdir -p /app/.baileys_auth /app/data \
+  && chown 99:100 /app/.baileys_auth /app/data
 
 ENV NODE_ENV=production
 
@@ -86,6 +106,8 @@ EXPOSE ${PORT}
 # Startup script
 RUN printf '#!/bin/sh\nset -e\necho "Running migrations..."\nnode dist/database/migrate.js\necho "Running seed..."\nnode dist/database/seed.js\necho "Starting server..."\nexec node dist/index.js\n' > /docker-entrypoint.sh \
   && chmod +x /docker-entrypoint.sh
+
+USER 99:100
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
   CMD node -e "fetch('http://localhost:' + (process.env.PORT || 9000) + '/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"

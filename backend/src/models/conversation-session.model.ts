@@ -49,6 +49,11 @@ export interface SeasonInfo {
   episodeCount: number;
   airDate?: string;
   overview?: string;
+  /**
+   * Overseerr status for this season (2=pending, 3=processing,
+   * 4=partially available, 5=available). Undefined when never requested.
+   */
+  status?: number;
 }
 
 /**

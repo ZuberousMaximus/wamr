@@ -1050,4 +1050,126 @@ describe('RequestApprovalService', () => {
       expect(result.errorMessage).toContain("movie");
     });
   });
+
+  describe('duplicate check for series seasons', () => {
+    const phoneNumberHash = 'hash123';
+    const phoneNumber = '+1234567890';
+    const series = { ...mockSelectedResult, title: 'Test Show', mediaType: 'series' as const };
+    const existing = (selectedSeasons: number[] | null, status = 'SUBMITTED') =>
+      ({
+        id: 42,
+        title: 'Test Show',
+        year: 2023,
+        tmdbId: 12345,
+        tvdbId: 67890,
+        phoneNumberHash,
+        status,
+        selectedSeasons,
+      }) as any;
+
+    beforeEach(() => {
+      vi.mocked(whatsappConnectionRepository.getActive).mockResolvedValue({
+        ...mockConnection,
+        autoApprovalMode: 'manual',
+      });
+      vi.mocked(mediaServiceConfigRepository.findById).mockResolvedValue({
+        ...mockServiceConfig,
+        serviceType: 'sonarr',
+      });
+      vi.mocked(requestHistoryRepository.create).mockResolvedValue({
+        id: 1,
+        phoneNumberHash,
+        status: 'PENDING',
+      } as any);
+    });
+
+    it('allows a different season of a show that was already requested', async () => {
+      vi.mocked(requestHistoryRepository.findAll).mockResolvedValue([existing([1])]);
+
+      const result = await service.createAndProcessRequest(
+        phoneNumberHash,
+        phoneNumber,
+        series,
+        1,
+        [2]
+      );
+
+      expect(result).toEqual({ success: true, status: 'PENDING' });
+      expect(requestHistoryRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({ selectedSeasons: [2] })
+      );
+    });
+
+    it('blocks a season that overlaps an open request', async () => {
+      vi.mocked(requestHistoryRepository.findAll).mockResolvedValue([existing([1, 2])]);
+
+      const result = await service.createAndProcessRequest(
+        phoneNumberHash,
+        phoneNumber,
+        series,
+        1,
+        [2, 3]
+      );
+
+      expect(result.status).toBe('DUPLICATE');
+      expect(requestHistoryRepository.create).not.toHaveBeenCalled();
+    });
+
+    it('treats an earlier whole-show request as covering every season', async () => {
+      vi.mocked(requestHistoryRepository.findAll).mockResolvedValue([existing(null)]);
+
+      const result = await service.createAndProcessRequest(
+        phoneNumberHash,
+        phoneNumber,
+        series,
+        1,
+        [3]
+      );
+
+      expect(result.status).toBe('DUPLICATE');
+    });
+
+    it('treats a new whole-show request as overlapping any earlier season', async () => {
+      vi.mocked(requestHistoryRepository.findAll).mockResolvedValue([existing([1])]);
+
+      const result = await service.createAndProcessRequest(
+        phoneNumberHash,
+        phoneNumber,
+        series,
+        1
+      );
+
+      expect(result.status).toBe('DUPLICATE');
+    });
+
+    it('ignores closed requests for the same seasons', async () => {
+      vi.mocked(requestHistoryRepository.findAll).mockResolvedValue([existing([2], 'REJECTED')]);
+
+      const result = await service.createAndProcessRequest(
+        phoneNumberHash,
+        phoneNumber,
+        series,
+        1,
+        [2]
+      );
+
+      expect(result).toEqual({ success: true, status: 'PENDING' });
+    });
+
+    it('still blocks a repeat movie request regardless of seasons', async () => {
+      vi.mocked(mediaServiceConfigRepository.findById).mockResolvedValue(mockServiceConfig);
+      vi.mocked(requestHistoryRepository.findAll).mockResolvedValue([
+        { ...existing(null), title: 'Test Movie' },
+      ]);
+
+      const result = await service.createAndProcessRequest(
+        phoneNumberHash,
+        phoneNumber,
+        mockSelectedResult,
+        1
+      );
+
+      expect(result.status).toBe('DUPLICATE');
+    });
+  });
 });

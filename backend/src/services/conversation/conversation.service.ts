@@ -598,19 +598,18 @@ export class ConversationService {
 
     // Block requests for media that Overseerr already knows about (status >= 2).
     // 2=pending, 3=processing, 4=partially_available, 5=available
-    if (selectedResult.mediaStatus !== undefined && selectedResult.mediaStatus >= 2) {
-      const emoji = selectedResult.mediaType === 'movie' ? '🎬' : '📺';
-      const yearStr = selectedResult.year ? ` (${selectedResult.year})` : '';
-      const statusMessages: Record<number, string> = {
-        2: `⏳ *${selectedResult.title}${yearStr}* has already been requested and is pending approval.`,
-        3: `⚙️ *${selectedResult.title}${yearStr}* is already being processed/downloaded.`,
-        4: `✅ *${selectedResult.title}${yearStr}* is partially available — some content can already be watched!`,
-        5: `✅ *${selectedResult.title}${yearStr}* is already available in the library. You can watch it now!`,
-      };
-      const msg =
-        statusMessages[selectedResult.mediaStatus] ??
-        `ℹ️ ${emoji} *${selectedResult.title}${yearStr}* is already in the system.`;
-      return this.createResponse(session, msg, 'AWAITING_SELECTION');
+    // Series are checked per season below instead: a show that is partially
+    // available may still have seasons that were never requested.
+    if (
+      selectedResult.mediaType !== 'series' &&
+      selectedResult.mediaStatus !== undefined &&
+      selectedResult.mediaStatus >= 2
+    ) {
+      return this.createResponse(
+        session,
+        this.buildAlreadyInSystemMessage(selectedResult, selectedResult.mediaStatus),
+        'AWAITING_SELECTION'
+      );
     }
 
     // Check if this is a TV series - if so, fetch season details and ask for season selection
@@ -646,6 +645,12 @@ export class ConversationService {
           // Use top-level seasons array (has episode counts and details)
           // and optionally merge with mediaInfo.seasons for availability status
           if (tvDetails && tvDetails.seasons && tvDetails.seasons.length > 0) {
+            // Per-season availability lives on mediaInfo.seasons; seasons that
+            // were never requested are absent from it.
+            const seasonStatuses = new Map<number, number>(
+              (tvDetails.mediaInfo?.seasons ?? []).map((s) => [s.seasonNumber, s.status])
+            );
+
             // Filter out season 0 (specials) and get only regular seasons
             const regularSeasons: import('../../models/conversation-session.model.js').SeasonInfo[] =
               tvDetails.seasons
@@ -656,9 +661,26 @@ export class ConversationService {
                   episodeCount: s.episodeCount || 0,
                   airDate: s.airDate,
                   overview: s.overview,
+                  status: seasonStatuses.get(s.seasonNumber),
                 }));
 
             if (regularSeasons.length > 0) {
+              const requestableSeasons = regularSeasons.filter(
+                (s) => !this.isSeasonAlreadyHandled(s)
+              );
+
+              // Every season is already available or requested — nothing new to ask for
+              if (requestableSeasons.length === 0) {
+                return this.createResponse(
+                  session,
+                  this.buildAlreadyInSystemMessage(
+                    selectedResult,
+                    selectedResult.mediaStatus ?? tvDetails.mediaInfo?.status ?? 5
+                  ),
+                  'AWAITING_SELECTION'
+                );
+              }
+
               // Transition to AWAITING_SEASON_SELECTION
               const action: StateMachineAction = {
                 type: 'SELECT_RESULT',
@@ -695,15 +717,17 @@ export class ConversationService {
                 `📺 *${selectedResult.title}${yearStr}*\n\n` + `Available seasons:\n\n`;
 
               regularSeasons.forEach((season) => {
-                seasonMessage += `Season ${season.seasonNumber}: ${season.name} (${season.episodeCount} episodes)\n`;
+                seasonMessage += `Season ${season.seasonNumber}: ${season.name} (${season.episodeCount} episodes)${this.describeSeasonStatus(season.status)}\n`;
               });
+
+              const someSeasonsHandled = requestableSeasons.length < regularSeasons.length;
 
               seasonMessage +=
                 `\n` +
                 `Which season(s) would you like to download?\n\n` +
                 `Reply with:\n` +
                 `• Season numbers (e.g., "1", "1,2,3")\n` +
-                `• "all" for all seasons\n` +
+                `• "all" for ${someSeasonsHandled ? 'all remaining seasons' : 'all seasons'}\n` +
                 `• "cancel" to start over`;
 
               return this.createResponse(session, seasonMessage, 'AWAITING_SEASON_SELECTION');
@@ -721,6 +745,15 @@ export class ConversationService {
           'Failed to fetch TV season details, proceeding with confirmation'
         );
       }
+    }
+
+    // Season info was unavailable, so fall back to the show-level status
+    if (selectedResult.mediaStatus !== undefined && selectedResult.mediaStatus >= 2) {
+      return this.createResponse(
+        session,
+        this.buildAlreadyInSystemMessage(selectedResult, selectedResult.mediaStatus),
+        'AWAITING_SELECTION'
+      );
     }
 
     // For movies or if season fetch failed, proceed to confirmation
@@ -811,6 +844,51 @@ export class ConversationService {
   }
 
   /**
+   * A season with Overseerr status >= 2 is pending, processing or (partially)
+   * available, so requesting it again would be a duplicate.
+   */
+  private isSeasonAlreadyHandled(season: { status?: number }): boolean {
+    return season.status !== undefined && season.status >= 2;
+  }
+
+  private describeSeasonStatus(status: number | undefined): string {
+    switch (status) {
+      case 2:
+        return ' — ⏳ already requested';
+      case 3:
+        return ' — ⚙️ downloading';
+      case 4:
+        return ' — ✅ partially available';
+      case 5:
+        return ' — ✅ available';
+      default:
+        return '';
+    }
+  }
+
+  private formatSeasonList(seasons: number[]): string {
+    return seasons.length === 1 ? `Season ${seasons[0]}` : `Seasons ${seasons.join(', ')}`;
+  }
+
+  /**
+   * Message for a title Overseerr already knows about (status >= 2)
+   */
+  private buildAlreadyInSystemMessage(selectedResult: NormalizedResult, status: number): string {
+    const emoji = selectedResult.mediaType === 'movie' ? '🎬' : '📺';
+    const yearStr = selectedResult.year ? ` (${selectedResult.year})` : '';
+    const statusMessages: Record<number, string> = {
+      2: `⏳ *${selectedResult.title}${yearStr}* has already been requested and is pending approval.`,
+      3: `⚙️ *${selectedResult.title}${yearStr}* is already being processed/downloaded.`,
+      4: `✅ *${selectedResult.title}${yearStr}* is partially available — some content can already be watched!`,
+      5: `✅ *${selectedResult.title}${yearStr}* is already available in the library. You can watch it now!`,
+    };
+    return (
+      statusMessages[status] ??
+      `ℹ️ ${emoji} *${selectedResult.title}${yearStr}* is already in the system.`
+    );
+  }
+
+  /**
    * Handle AWAITING_SEASON_SELECTION state - expecting season numbers or "all"
    */
   private async handleAwaitingSeasonSelection(
@@ -831,6 +909,9 @@ export class ConversationService {
 
     // Validate selected seasons against available seasons
     const availableSeasons = session.availableSeasons || [];
+    const requestableSeasonNumbers = availableSeasons
+      .filter((s) => !this.isSeasonAlreadyHandled(s))
+      .map((s) => s.seasonNumber);
 
     if (intent.seasons !== 'all') {
       const invalidSeasons = intent.seasons.filter(
@@ -848,10 +929,30 @@ export class ConversationService {
       }
     }
 
+    // Drop seasons that are already available or requested
+    const seasonsToRequest =
+      intent.seasons === 'all'
+        ? requestableSeasonNumbers
+        : intent.seasons.filter((n) => requestableSeasonNumbers.includes(n));
+    const skippedSeasons =
+      intent.seasons === 'all'
+        ? []
+        : intent.seasons.filter((n) => !requestableSeasonNumbers.includes(n));
+
+    if (seasonsToRequest.length === 0) {
+      return this.createResponse(
+        session,
+        `✅ ${this.formatSeasonList(skippedSeasons)} ${skippedSeasons.length === 1 ? 'is' : 'are'} already available or requested.\n\n` +
+          `Seasons you can request: ${requestableSeasonNumbers.join(', ')}\n\n` +
+          'Please try again or reply *CANCEL* to go back.',
+        'AWAITING_SEASON_SELECTION'
+      );
+    }
+
     // Transition to AWAITING_CONFIRMATION
     const action: StateMachineAction = {
       type: 'SELECT_SEASONS',
-      seasons: intent.seasons,
+      seasons: seasonsToRequest,
     };
 
     const transitionResult = stateMachine.processAction(session.state, action);
@@ -871,8 +972,7 @@ export class ConversationService {
     // Update session with selected seasons
     await conversationSessionRepository.update(session.id, {
       state: 'AWAITING_CONFIRMATION',
-      selectedSeasons:
-        intent.seasons === 'all' ? availableSeasons.map((s) => s.seasonNumber) : intent.seasons,
+      selectedSeasons: seasonsToRequest,
       expiresAt: getExpirationTime(this.SESSION_EXPIRY_MINUTES),
     });
 
@@ -888,13 +988,13 @@ export class ConversationService {
 
     // Build season summary
     let seasonSummary: string;
-    if (intent.seasons === 'all') {
+    if (intent.seasons === 'all' && seasonsToRequest.length === availableSeasons.length) {
       seasonSummary = `All ${availableSeasons.length} seasons`;
     } else {
-      seasonSummary =
-        intent.seasons.length === 1
-          ? `Season ${intent.seasons[0]}`
-          : `Seasons ${intent.seasons.join(', ')}`;
+      seasonSummary = this.formatSeasonList(seasonsToRequest);
+    }
+    if (skippedSeasons.length > 0) {
+      seasonSummary += ` (skipping ${this.formatSeasonList(skippedSeasons)}, already available or requested)`;
     }
 
     const confirmationMessage =

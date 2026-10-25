@@ -221,14 +221,15 @@ See [Database Commands](#database-run-from-backend) above for migration workflow
 
 - **Backend**: 654 unit tests covering controllers, services, repositories, and middleware
 - **Frontend**: 7 component and utility tests
-- **CI/CD**: Automated testing with `bun run ci`
+- **CI/CD**: Automated testing with `npm run ci`
 
 **Run Tests:**
 
 ```bash
-bun run test           # Run all tests
-bun run test:backend   # Backend tests only
-bun run test:frontend  # Frontend tests only
+npm ci                    # Install exactly what package-lock.json pins
+npm test                  # Run all tests
+npm test -w backend       # Backend tests only
+npm test -w frontend      # Frontend tests only
 ```
 
 **Test Infrastructure:**

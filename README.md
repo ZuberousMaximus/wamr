@@ -22,6 +22,41 @@ An open-source, self-hosted WhatsApp bot that enables users to request movies an
 > - [SECURITY.md](SECURITY.md) - Security policy and reporting
 > - [SCREENSHOTS.md](SCREENSHOTS.md) - Application screenshots and interface tour
 
+## 🍴 About This Fork
+
+This is a fork of [techieanant/wamr](https://github.com/techieanant/wamr), tuned for a self-hosted Unraid setup on a home network. Its image is published as **`ghcr.io/zuberousmaximus/wamr:latest`** (x86-64). Note that `docker-compose.prod.yml` still points at the upstream image, so set `image:` to this one to get the changes below.
+
+### Improvements in this fork
+
+**Smarter requests**
+
+- **Request more seasons of a show you already have**: asking for another season of a partially available show now opens the season picker. Seasons already available, downloading or requested are marked, and "all" means all remaining seasons. Previously it stopped at "partially available".
+- **Optional LLM intent parsing** (Gemini, OpenAI, Ollama or any OpenAI-compatible endpoint): handles free-form requests, titles that look like commands ("No Country for Old Men"), number titles ("1917") and season ranges ("1-3"). It falls back to the keyword parser on any error and is off by default.
+- **Misspelled titles still find a match**: when a search returns nothing, it retries once with the LLM's best guess at the real title ("Coffee with Karan" → "Koffee with Karan"). A wrong guess can't hide a result the original search would have found.
+- **Searches that include a year**: "Dune 2021" used to return nothing. A dated search that misses now retries on the bare title and ranks exact-year matches first.
+
+**WhatsApp**
+
+- **Contact allow-list** (optional): only numbers in Contacts get replies, and everyone else is ignored silently. Useful when the linked WhatsApp account is also your personal one.
+
+**Works over plain HTTP on the LAN**
+
+- Fixed a blank white UI at `http://SERVER_IP:9002`, caused by the CSP upgrading assets to https.
+- Fixed logins and live updates failing over plain HTTP, caused by the auth cookie always being marked Secure in production.
+
+**Security hardening**
+
+- **Slimmer, non-root image**: 720 MB → 317 MB. It runs as Unraid's `99:100` on Node 22, with no devDependencies, npm or git in the image. Trivy HIGH/CRITICAL findings went from 18 critical / 262 high to 1 / 17.
+- **No default secrets**: `JWT_SECRET` and `ENCRYPTION_KEY` must be set; the compose file used to ship public fallback values.
+- **Login rate limit can't be bypassed**: a forged `X-Forwarded-For` no longer resets the limit. Only proxies on the host, Docker network or LAN are trusted, configurable with `TRUST_PROXY`.
+- **Recovery endpoints are rate-limited**: backup-code regeneration and password reset, which were previously unlimited.
+- **Stricter CORS**: dev-origin matching no longer accepts look-alikes such as `localhost.evil.com`.
+- **Verified dependencies**: every package in `package-lock.json` is now checked against its integrity hash on install. In-range security updates brought npm audit advisories from 37 to 18; the rest need major upgrades.
+
+**CI**
+
+- CI now runs the typecheck and full test suite on every PR and installs with `npm ci`, so lockfile drift fails the build.
+
 ## 🚀 Quick Start
 
 ### Prerequisites
@@ -80,6 +115,8 @@ On first access, you'll be guided through a setup wizard to:
 - 🎬 **Media Request System** - Users can request movies and TV shows via WhatsApp
 - 🔄 **Service Integration** - Connect to Radarr, Sonarr, or Overseerr
 - 🧠 **Optional LLM Intent Parsing** - Point WAMR at Gemini, OpenAI or a local Ollama model for free-form requests, with automatic fallback to the built-in keyword parser (see [ENVIRONMENT.md](ENVIRONMENT.md#natural-language-intent-parsing-llm))
+- 📺 **Per-Season Requests** - Request further seasons of a show that is already partly in your library
+- 🙋 **Contact Allow-List** - Optionally reply only to numbers in Contacts
 - 📊 **Request Management** - Approve, reject, or auto-approve media requests
 - 🔍 **Media Search** - Search across configured media services
 - 📝 **Audit Logging** - Complete history of all requests and actions
@@ -192,7 +229,10 @@ See [SECURITY.md](SECURITY.md) for our security policy and vulnerability reporti
 - Hashed passwords (bcrypt)
 - Hashed phone numbers (SHA-256)
 - JWT authentication
-- Rate limiting on all endpoints
+- Rate limiting on all endpoints, with tighter limits on login and account recovery
+- Client IPs taken only from trusted (private-network) proxies, so rate limits can't be bypassed with a forged `X-Forwarded-For`
+- No default secrets: `JWT_SECRET` and `ENCRYPTION_KEY` must be provided
+- Container runs as a non-root user (`99:100`)
 - Automatic sensitive data redaction in logs
 
 ## 📝 Database
@@ -215,11 +255,11 @@ See [Database Commands](#database-run-from-backend) above for migration workflow
 
 ## 🧪 Testing
 
-**Status**: ✅ Active - 661 tests passing
+**Status**: ✅ Active - 850 tests passing
 
 **Current Coverage:**
 
-- **Backend**: 654 unit tests covering controllers, services, repositories, and middleware
+- **Backend**: 843 tests covering controllers, services, repositories, and middleware
 - **Frontend**: 7 component and utility tests
 - **CI/CD**: Automated testing with `npm run ci`
 

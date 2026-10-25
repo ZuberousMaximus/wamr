@@ -243,25 +243,21 @@ bun run test:frontend  # Frontend tests only
 **Quick Start:**
 
 ```bash
-# Pull and start with defaults
-docker compose -f docker-compose.prod.yml up -d
+# Generate your own secrets (required; there are no defaults)
+printf 'JWT_SECRET=%s\nENCRYPTION_KEY=%s\n' "$(openssl rand -base64 32)" "$(openssl rand -hex 32)" > .env.prod
+
+# Pull and start
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
 
 # Access: http://localhost:9002
 # Complete the setup wizard to create your admin account
 ```
 
-⚠️ **For production**: Create a `.env.prod` file to customize security keys!
+Keep `.env.prod` out of git, and keep `ENCRYPTION_KEY` once data exists: stored API keys and phone numbers are encrypted with it.
 
-**Customize Settings (Optional):**
+**Customize Settings (Optional):** copy `.env.example` to `.env.prod`, add your secrets and any overrides, and start with the same command.
 
-```bash
-# Create .env.prod file
-cp .env.example .env.prod
-
-# Edit with your values (especially JWT_SECRET, ENCRYPTION_KEY)
-# Then start the container
-docker compose -f docker-compose.prod.yml up -d
-```
+**Upgrading from a version that shipped default secrets:** if you never set your own, the container has been using the old defaults. To keep the existing data readable, put those exact values in `.env.prod` (or generate new ones on a fresh install).
 
 **Access:**
 

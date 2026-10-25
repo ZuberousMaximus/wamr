@@ -22,17 +22,20 @@ WAMR uses a single combined container that serves both frontend and backend for 
 
 This is the recommended method for production deployments with data stored in the current directory.
 
-**Quick Start (Using Defaults):**
+**Quick Start:**
 
 ```bash
-# Pull and start with default settings
-docker compose -f docker-compose.prod.yml up -d
+# Generate your own secrets (required; there are no defaults)
+printf 'JWT_SECRET=%s\nENCRYPTION_KEY=%s\n' "$(openssl rand -base64 32)" "$(openssl rand -hex 32)" > .env.prod
+
+# Pull and start
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
 
 # Access: http://localhost:9002
 # Complete the setup wizard to create your admin account
 ```
 
-⚠️ **For production, you MUST customize the security settings!**
+⚠️ `docker compose` only reads `.env.prod` when you pass `--env-file .env.prod`.
 
 **1. Customize Environment Variables (Recommended for Production)**
 
@@ -118,7 +121,7 @@ These folders will be created automatically if they don't exist.
 
 ### Environment Variable Reference
 
-The `docker-compose.prod.yml` file uses environment variables with sensible defaults. You can override any of these by creating a `.env.prod` file:
+The `docker-compose.prod.yml` file uses environment variables with sensible defaults, except for the two secrets, which you must set. Put your values in `.env.prod` and pass `--env-file .env.prod`:
 
 | Variable                       | Default              | Description                                  |
 | ------------------------------ | -------------------- | -------------------------------------------- |
@@ -126,8 +129,8 @@ The `docker-compose.prod.yml` file uses environment variables with sensible defa
 | `NODE_ENV`                     | `production`         | Node environment                             |
 | `PORT`                         | `9000`               | Container internal port                      |
 | `DATABASE_PATH`                | `/app/data/wamr.db`  | Database path inside container               |
-| `JWT_SECRET`                   | _(default provided)_ | **⚠️ Change for production!**                |
-| `ENCRYPTION_KEY`               | _(default provided)_ | **⚠️ Change for production!**                |
+| `JWT_SECRET`                   | _(required)_         | `openssl rand -base64 32`                    |
+| `ENCRYPTION_KEY`               | _(required)_         | `openssl rand -hex 32`; keep it once set     |
 | `ADMIN_USERNAME`               | _(optional)_         | Pre-configure admin (skips setup wizard)     |
 | `ADMIN_PASSWORD`               | _(optional)_         | Pre-configure admin password                 |
 | `CORS_ORIGIN`                  | `*`                  | Allowed CORS origins                         |

@@ -81,6 +81,13 @@ export class RequestApprovalService {
       // to Overseerr failed silently, Overseerr won't know about it).
       const existingRequests = await requestHistoryRepository.findAll();
       const duplicate = existingRequests.find((r) => {
+        // A different season of the same show is a new request, not a duplicate
+        if (
+          selectedResult.mediaType === 'series' &&
+          !this.seasonsOverlap(r.selectedSeasons, selectedSeasons)
+        ) {
+          return false;
+        }
         // Match by tmdbId for exact matches
         if (selectedResult.tmdbId && r.tmdbId === selectedResult.tmdbId) {
           return ['PENDING', 'APPROVED', 'SUBMITTED'].includes(r.status);
@@ -399,6 +406,16 @@ export class RequestApprovalService {
       logger.warn({ err, replyJid }, 'Failed to resolve contact for exception fallback');
       return false;
     }
+  }
+
+  /**
+   * Whether two series requests ask for any of the same seasons. A request
+   * without a season list covers the whole show, so it overlaps everything.
+   */
+  private seasonsOverlap(existing: unknown, requested: number[] | undefined): boolean {
+    if (!Array.isArray(existing) || existing.length === 0) return true;
+    if (!requested || requested.length === 0) return true;
+    return requested.some((season) => existing.includes(season));
   }
 
   /**

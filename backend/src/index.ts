@@ -10,6 +10,7 @@ import { logger } from './config/logger';
 import { webSocketService } from './services/websocket/websocket.service';
 import { errorHandler, notFoundHandler } from './api/middleware/error-handler.middleware';
 import { adminRateLimiter } from './api/middleware/rate-limit.middleware';
+import { isAllowedCorsOrigin, parseTrustProxy } from './config/http-security';
 import { closeDatabaseConnection } from './db';
 import authRoutes from './api/routes/auth.routes';
 import setupRoutes from './api/routes/setup.routes';
@@ -38,8 +39,9 @@ const __dirname = path.dirname(__filename);
 function createApp(): Express {
   const app = express();
 
-  // Trust proxy headers (for Nginx Proxy Manager)
-  app.set('trust proxy', true);
+  // Trust proxy headers from reverse proxies on private networks (Nginx Proxy
+  // Manager, Cloudflare Tunnel, etc.). Override with TRUST_PROXY.
+  app.set('trust proxy', parseTrustProxy(env.TRUST_PROXY));
 
   // Security middleware with relaxed CSP for reverse proxy compatibility
   app.use(
@@ -73,17 +75,7 @@ function createApp(): Express {
   app.use(
     cors({
       origin: (origin, callback) => {
-        if (!origin) return callback(null, true);
-        if (origin === env.CORS_ORIGIN || env.CORS_ORIGIN === '*') {
-          return callback(null, true);
-        }
-        const allowedOrigins = [
-          'http://localhost:3000',
-          'http://localhost:3001',
-          'http://localhost:5173',
-          'http://localhost',
-        ];
-        if (allowedOrigins.includes(origin) || allowedOrigins.some((o) => origin.startsWith(o))) {
+        if (isAllowedCorsOrigin(origin, env.CORS_ORIGIN)) {
           return callback(null, true);
         }
         callback(new Error('Not allowed by CORS'));

@@ -77,6 +77,16 @@ export const loginRateLimiter = createRateLimitMiddleware({
 });
 
 /**
+ * Setup / recovery rate limiter for the unauthenticated endpoints that check a
+ * password or backup code. Same budget as login, with its own counter.
+ */
+export const setupRateLimiter = createRateLimitMiddleware({
+  windowMs: env.RATE_LIMIT_WINDOW_MS,
+  maxRequests: env.LOGIN_RATE_LIMIT_MAX,
+  keyGenerator: (req: Request) => `setup:${req.ip || req.socket.remoteAddress || 'unknown'}`,
+});
+
+/**
  * WhatsApp message rate limiter (10 messages per minute per phone number)
  */
 export function createWhatsAppRateLimiter() {

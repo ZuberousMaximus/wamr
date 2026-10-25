@@ -10,8 +10,8 @@ services:
       - NODE_ENV=${NODE_ENV:-production}
       - PORT=${PORT:-9000}
       - DATABASE_PATH=${DATABASE_PATH:-/app/data/wamr.db}
-      - JWT_SECRET=${JWT_SECRET:-3qv6thWNpfw9H+lRw7u0jyNGVkZx6xcC71r/EPY62Ck=}
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-96a4f9ff8eb54b577abf567609167e381b40bb9d2308e574a235bd90c13b5133}
+      - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env.prod (openssl rand -base64 32) and pass --env-file .env.prod}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:?Set ENCRYPTION_KEY in .env.prod (openssl rand -hex 32) and pass --env-file .env.prod}
       - ADMIN_USERNAME=${ADMIN_USERNAME}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - CORS_ORIGIN=${CORS_ORIGIN:-*}

@@ -129,6 +129,7 @@ class MediaMonitoringService {
       availableSeasons?: number[];
       availableEpisodes?: Record<number, number[]>;
       totalSeasons?: number;
+      failed?: string;
     } = { isAvailable: false };
 
     try {
@@ -150,6 +151,22 @@ class MediaMonitoringService {
         if (availabilityInfo.availableEpisodes) {
           await this.handleEpisodeUpdates(request, availabilityInfo.availableEpisodes);
         }
+      } else if ('failed' in availabilityInfo && availabilityInfo.failed) {
+        // Backing library rejected the request (seen when Seerr forwards with a
+        // quality profile the backing service doesn't have). Mark FAILED + notify
+        // the admin instead of leaving the request in SUBMITTED forever.
+        logger.warn(
+          { requestId: request.id, title: request.title, reason: availabilityInfo.failed },
+          'Media request failed in backing service'
+        );
+
+        await requestHistoryRepository.update(request.id, {
+          status: 'FAILED',
+          errorMessage: availabilityInfo.failed,
+          updatedAt: new Date().toISOString(),
+        });
+
+        await this.notifyUserRequestFailed(request, availabilityInfo.failed);
       } else if (availabilityInfo.isAvailable && request.mediaType === 'movie') {
         // Movies - simple notification
         logger.info({ requestId: request.id, title: request.title }, 'Movie is now available!');
@@ -181,6 +198,7 @@ class MediaMonitoringService {
     isPartial?: boolean;
     availableSeasons?: number[];
     totalSeasons?: number;
+    failed?: string;
   }> {
     const client = new OverseerrClient(baseUrl, apiKey);
 
@@ -205,9 +223,35 @@ class MediaMonitoringService {
 
       const status = match.mediaInfo?.status;
 
+      // Detect a Seerr-side request failure (Radarr/Sonarr rejected the forwarded
+      // add — e.g. quality-profile mismatch). Without this the WAMR request sat in
+      // SUBMITTED forever. Seerr declined its own request with status 3.
+      const seerrRequestFailed = match.mediaInfo?.requests?.some((r) => r.status === 3);
+      if (seerrRequestFailed) {
+        logger.warn(
+          { requestId: request.id, seerrMediaStatus: status },
+          'Seerr request declined — backing service rejected the media'
+        );
+        return {
+          isAvailable: false,
+          failed: 'Local library rejected the request (check Seerr)',
+        };
+      }
+
       // Status 5 = fully available, Status 4 = partially available
-      const isFullyAvailable = status === 5;
-      const isPartiallyAvailable = status === 4;
+      const isFullyAvailableRaw = status === 5;
+      const isPartiallyAvailableRaw = status === 4;
+
+      // Seerr status 5/4 only means the media was added to the backing service's
+      // library — the file may still be downloading. Verify via the backing
+      // service's own API before declaring anything available to the user.
+      const isFullyAvailable =
+        isFullyAvailableRaw &&
+        (await this.verifyBackingFileAvailable(baseUrl, apiKey, 'movie', request));
+      const isPartiallyAvailable =
+        isPartiallyAvailableRaw &&
+        request.mediaType === 'series' &&
+        (await this.verifyBackingFileAvailable(baseUrl, apiKey, 'series', request));
 
       // If it's a TV series and partially available, get season details
       if (isPartiallyAvailable && request.mediaType === 'series' && request.tmdbId) {
@@ -698,6 +742,96 @@ class MediaMonitoringService {
   }
 
   /**
+   * Verify actual download state on the backing Radarr/Sonarr instance behind a
+   * Seerr service.
+   *
+   * Seerr's mediaInfo.status === 5 only means the media entry was *added* to the
+   * backing service's library — the file may still be downloading. Before telling
+   * a user their request is available, confirm a file actually exists on disk via
+   * the backing service's own API (its connection details come from Seerr's
+   * service settings).
+   */
+  private async verifyBackingFileAvailable(
+    seerrBaseUrl: string,
+    seerrApiKey: string,
+    mediaType: 'movie' | 'series',
+    request: any
+  ): Promise<boolean> {
+    const client = new OverseerrClient(seerrBaseUrl, seerrApiKey);
+    try {
+      const servers =
+        mediaType === 'movie' ? await client.getRadarrServers() : await client.getSonarrServers();
+      const server = servers.find((s) => s.isDefault) ?? servers[0];
+
+      if (!server) {
+        logger.warn(
+          { requestId: request.id },
+          'No backing service configured in Seerr; accepting Seerr status as-is'
+        );
+        return true;
+      }
+
+      if (mediaType === 'movie') {
+        const radarr = new RadarrClient(
+          server.backingBaseUrl,
+          server.backingApiKey,
+          server.backingAllowInsecure
+        );
+        const movie = await radarr.getMovieByTmdbId(request.tmdbId);
+        const hasFile = movie?.hasFile === true;
+        logger.debug(
+          { requestId: request.id, tmdbId: request.tmdbId, server: server.name, hasFile },
+          'Backing Radarr file verification'
+        );
+        return hasFile;
+      }
+
+      const sonarr = new SonarrClient(
+        server.backingBaseUrl,
+        server.backingApiKey,
+        server.backingAllowInsecure
+      );
+      // Series: require all requested seasons to have season statistics with
+      // available episode files equal to total episodes.
+      const series = await sonarr.getSeriesByTvdbId(request.tvdbId);
+      if (!series) {
+        logger.debug({ requestId: request.id, tvdbId: request.tvdbId }, 'Series not in Sonarr');
+        return false;
+      }
+      const requestedSeasons: number[] | null =
+        (request.selectedSeasons as number[] | null) ?? null;
+      const seasonStats = series.seasons ?? [];
+      const relevant = requestedSeasons?.length
+        ? seasonStats.filter((s: any) => requestedSeasons.includes(s.seasonNumber))
+        : seasonStats.filter((s: any) => s.seasonNumber > 0);
+      const complete = relevant.every((s: any) => {
+        const stat = s.statistics;
+        if (!stat) return false;
+        return stat.totalEpisodeCount > 0 && stat.episodeFileCount >= stat.totalEpisodeCount;
+      });
+      logger.debug(
+        {
+          requestId: request.id,
+          tvdbId: request.tvdbId,
+          server: server.name,
+          complete,
+          seasons: relevant.length,
+        },
+        'Backing Sonarr file verification'
+      );
+      return complete;
+    } catch (error) {
+      logger.error(
+        { error, requestId: request.id, mediaType },
+        'Backing file verification failed; falling back to Seerr status'
+      );
+      // If the backing check itself errors (e.g. transient network), prefer the
+      // previous behavior rather than blocking notifications forever.
+      return true;
+    }
+  }
+
+  /**
    * Check Radarr for movie availability
    */
   private async checkRadarrStatus(baseUrl: string, apiKey: string, request: any): Promise<boolean> {
@@ -913,6 +1047,36 @@ class MediaMonitoringService {
       );
     } catch (error) {
       logger.error({ error, requestId: request.id }, 'Error sending availability notification');
+    }
+  }
+
+  /**
+   * Notify the requester that their request failed in the backing service,
+   * so the request no longer sits in SUBMITTED forever.
+   */
+  private async notifyUserRequestFailed(request: any, reason: string): Promise<void> {
+    try {
+      const phoneNumber = await this.getPhoneNumber(request);
+      if (!phoneNumber) return;
+
+      const { whatsappClientService } = await import('../whatsapp/whatsapp-client.service.js');
+
+      const emoji = request.mediaType === 'movie' ? '🎬' : '📺';
+      const yearStr = request.year ? ` (${request.year})` : '';
+
+      const message =
+        `❌ *Request issue*\n\n` +
+        `${emoji} *${request.title}${yearStr}* could not be added to the library.\n\n` +
+        `${reason}\n\n` +
+        `The administrator can retry it from the dashboard.`;
+
+      await whatsappClientService.sendMessage(phoneNumber, message);
+      logger.info(
+        { requestId: request.id, title: request.title, phoneNumber: phoneNumber.slice(-4) },
+        'Sent failure notification to user'
+      );
+    } catch (error) {
+      logger.error({ error, requestId: request.id }, 'Error sending failure notification');
     }
   }
 

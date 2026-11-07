@@ -369,7 +369,7 @@ describe('Requests Controller', () => {
       expect(mockResponse.json).toHaveBeenCalledWith({ error: 'Request not found' });
     });
 
-    it('should return 400 when request status is not PENDING or FAILED', async () => {
+    it('should return 400 when request status is already submitted', async () => {
       const mockRequestData = { id: 1, status: 'APPROVED', serviceConfigId: 1 };
       mockRequest.params = { id: '1' };
 
@@ -379,7 +379,7 @@ describe('Requests Controller', () => {
 
       expect(mockResponse.status).toHaveBeenCalledWith(400);
       expect(mockResponse.json).toHaveBeenCalledWith({
-        error: 'Request must be in PENDING or FAILED status to approve',
+        error: 'Request must be in PENDING, FAILED or REJECTED status to approve',
       });
     });
 
@@ -442,7 +442,9 @@ describe('Requests Controller', () => {
         '../../../src/services/integrations/overseerr.client'
       );
       const mockClientInstance = {
-        getRadarrServers: vi.fn().mockResolvedValue([{ id: 1, isDefault: true }]),
+        getRadarrServers: vi.fn().mockResolvedValue([
+          { id: 1, isDefault: true, activeProfileId: 7 },
+        ]),
         requestMovie: vi.fn().mockResolvedValue(undefined),
       };
       (OverseerrClient as any).mockImplementation(() => mockClientInstance);
@@ -453,7 +455,8 @@ describe('Requests Controller', () => {
       expect(mockClientInstance.requestMovie).toHaveBeenCalledWith({
         mediaId: 123,
         serverId: 1,
-        profileId: 1,
+        // Profile must come from Seerr's server config, not the hardcoded 1
+        profileId: 7,
         rootFolder: undefined,
       });
       expect(requestHistoryRepository.update).toHaveBeenCalledWith(1, {
@@ -1008,7 +1011,9 @@ describe('Requests Controller', () => {
         '../../../src/services/integrations/overseerr.client'
       );
       const mockClientInstance = {
-        getRadarrServers: vi.fn().mockResolvedValue([{ id: 1, isDefault: true }]),
+        getRadarrServers: vi.fn().mockResolvedValue([
+          { id: 1, isDefault: true, activeProfileId: 7 },
+        ]),
         requestMovie: vi.fn().mockResolvedValue(undefined),
       };
       (OverseerrClient as any).mockImplementation(() => mockClientInstance);
@@ -1019,7 +1024,8 @@ describe('Requests Controller', () => {
       expect(mockClientInstance.requestMovie).toHaveBeenCalledWith({
         mediaId: 516486,
         serverId: 1,
-        profileId: 1,
+        // Profile must come from Seerr's server config, not the hardcoded 1
+        profileId: 7,
         rootFolder: undefined,
       });
       expect(requestHistoryRepository.update).toHaveBeenCalledWith(118, {

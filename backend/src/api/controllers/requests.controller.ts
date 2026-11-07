@@ -283,8 +283,15 @@ export const approveRequest = async (
       return;
     }
 
-    if (request.status !== 'PENDING' && request.status !== 'FAILED') {
-      res.status(400).json({ error: 'Request must be in PENDING or FAILED status to approve' });
+    // PENDING/FAILED/REJECTED are all actionable (REJECTED mirrors the retry feature)
+    if (
+      request.status !== 'PENDING' &&
+      request.status !== 'FAILED' &&
+      request.status !== 'REJECTED'
+    ) {
+      res
+        .status(400)
+        .json({ error: 'Request must be in PENDING, FAILED or REJECTED status to approve' });
       return;
     }
 
@@ -319,7 +326,10 @@ export const approveRequest = async (
           await client.requestMovie({
             mediaId: request.tmdbId,
             serverId: defaultServer.id,
-            profileId: 1,
+            // Use the profile configured in Seerr for this server — "profileId: 1"
+            // assumed a Seerr quality-profile definition that may not map to an
+            // existing Radarr profile, causing Radarr HTTP 400 on forwarding.
+            profileId: defaultServer.activeProfileId ?? 1,
             // Omit rootFolder when not configured so Overseerr uses its own defaults
             rootFolder: service.rootFolderPath ?? undefined,
           });
@@ -337,7 +347,7 @@ export const approveRequest = async (
           await client.requestSeries({
             mediaId: request.tmdbId,
             serverId: defaultServer.id,
-            profileId: 1,
+            profileId: defaultServer.activeProfileId ?? 1,
             // Omit rootFolder when not configured so Overseerr uses its own defaults
             rootFolder: service.rootFolderPath ?? undefined,
             seasons: selectedSeasons && selectedSeasons.length > 0 ? selectedSeasons : 'all',
@@ -646,7 +656,7 @@ export const retryRequest = async (
           await client.requestMovie({
             mediaId: request.tmdbId,
             serverId: defaultServer.id,
-            profileId: 1,
+            profileId: defaultServer.activeProfileId ?? 1,
             rootFolder: service.rootFolderPath ?? undefined,
           });
         } else if (request.mediaType === 'series' && request.tmdbId) {
@@ -662,7 +672,7 @@ export const retryRequest = async (
           await client.requestSeries({
             mediaId: request.tmdbId,
             serverId: defaultServer.id,
-            profileId: 1,
+            profileId: defaultServer.activeProfileId ?? 1,
             rootFolder: service.rootFolderPath ?? undefined,
             seasons: selectedSeasons && selectedSeasons.length > 0 ? selectedSeasons : 'all',
           });

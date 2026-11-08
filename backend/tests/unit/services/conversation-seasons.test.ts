@@ -151,9 +151,13 @@ describe('ConversationService — per-season availability', () => {
 
       const result = await select(selectionSession());
 
-      expect(result.state).toBe('AWAITING_SELECTION');
+      // Nothing left to request, so the thread is closed rather than left open
+      expect(result.state).toBe('IDLE');
       expect(result.message).toContain('is partially available');
-      expect(conversationSessionRepository.update).not.toHaveBeenCalled();
+      expect(conversationSessionRepository.update).toHaveBeenCalledWith(
+        'session-1',
+        expect.objectContaining({ state: 'IDLE', searchResults: null })
+      );
     });
 
     it('falls back to the show-level block when season details cannot be fetched', async () => {
@@ -161,8 +165,12 @@ describe('ConversationService — per-season availability', () => {
 
       const result = await select(selectionSession());
 
-      expect(result.state).toBe('AWAITING_SELECTION');
+      expect(result.state).toBe('IDLE');
       expect(result.message).toContain('is partially available');
+      expect(conversationSessionRepository.update).toHaveBeenCalledWith(
+        'session-1',
+        expect.objectContaining({ state: 'IDLE' })
+      );
     });
 
     it('lets an untouched show through with the plain season prompt', async () => {
@@ -176,7 +184,7 @@ describe('ConversationService — per-season availability', () => {
     });
   });
 
-  describe('movies keep the existing block', () => {
+  describe('movies already in the system close the thread', () => {
     it.each([
       [2, 'pending approval'],
       [3, 'being processed'],
@@ -187,8 +195,12 @@ describe('ConversationService — per-season availability', () => {
 
       const result = await select(selectionSession(movie as any));
 
-      expect(result.state).toBe('AWAITING_SELECTION');
+      expect(result.state).toBe('IDLE');
       expect(result.message).toContain(text);
+      expect(conversationSessionRepository.update).toHaveBeenCalledWith(
+        'session-1',
+        expect.objectContaining({ state: 'IDLE', searchResults: null })
+      );
       expect(OverseerrClient).not.toHaveBeenCalled();
     });
   });

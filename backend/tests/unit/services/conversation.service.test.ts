@@ -453,6 +453,55 @@ describe('ConversationService', () => {
       expect(result.message).toContain('Processing your request');
     });
 
+    describe('new search while a menu is open', () => {
+      const awaitingSession = {
+        id: 'session123',
+        phoneNumberHash: 'hash123',
+        state: 'AWAITING_SELECTION',
+        searchResults: [{ title: 'Dune', mediaType: 'movie' }],
+        expiresAt: new Date(),
+      };
+
+      beforeEach(() => {
+        (conversationSessionRepository.findByPhoneHash as any).mockResolvedValue(awaitingSession);
+        (conversationSessionRepository.update as any).mockResolvedValue({
+          ...awaitingSession,
+          state: 'IDLE',
+        });
+        (intentParser.parse as any).mockReturnValue({
+          intent: 'media_request',
+          query: 'what time is dinner',
+          mediaType: 'both',
+        });
+        (stateMachine.processAction as any).mockReturnValue({ valid: true });
+      });
+
+      it('re-prompts instead of searching when the message bypassed the prefix filter', async () => {
+        const result = await service.processMessage(
+          'hash123',
+          'what time is dinner',
+          undefined,
+          undefined,
+          undefined,
+          { allowNewSearch: false }
+        );
+
+        expect(result.state).toBe('AWAITING_SELECTION');
+        expect(result.message).toContain('Please select a number from the list (1-1)');
+        expect(conversationSessionRepository.update).not.toHaveBeenCalled();
+      });
+
+      it('starts a new search when allowed (default)', async () => {
+        const result = await service.processMessage('hash123', 'Arrival');
+
+        expect(result.state).toBe('SEARCHING');
+        expect(conversationSessionRepository.update).toHaveBeenCalledWith(
+          'session123',
+          expect.objectContaining({ state: 'SEARCHING' })
+        );
+      });
+    });
+
     it('should prevent cancellation during PROCESSING state', async () => {
       const phoneNumberHash = 'hash123';
       const message = 'cancel';

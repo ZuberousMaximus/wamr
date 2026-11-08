@@ -34,6 +34,15 @@ export interface ConversationResponse {
  * Conversation Service
  * Orchestrates the conversation flow, state machine, and media search
  */
+export interface ProcessMessageOptions {
+  /**
+   * Whether this message may abandon an in-progress selection and start a new
+   * search. False when the message skipped the prefix/keyword filter only
+   * because the session was waiting for a reply. Defaults to true.
+   */
+  allowNewSearch?: boolean;
+}
+
 export class ConversationService {
   // Store reply JIDs for async callbacks (sessionId -> fullJid for sending messages)
   private activeReplyJids = new Map<string, string>();
@@ -109,7 +118,8 @@ export class ConversationService {
     message: string,
     replyJid?: string,
     contactName?: string | null,
-    phoneNumber?: string
+    phoneNumber?: string,
+    options: ProcessMessageOptions = {}
   ): Promise<ConversationResponse> {
     logger.info(
       { phoneNumberHash, message, contactName, hasPhoneNumber: !!phoneNumber },
@@ -272,7 +282,7 @@ export class ConversationService {
     );
 
     // Handle the intent based on current state
-    const response = await this.handleIntent(session, intent);
+    const response = await this.handleIntent(session, intent, options.allowNewSearch ?? true);
 
     return response;
   }
@@ -282,7 +292,8 @@ export class ConversationService {
    */
   private async handleIntent(
     session: ConversationSessionModel,
-    intent: IntentResult
+    intent: IntentResult,
+    allowNewSearch = true
   ): Promise<ConversationResponse> {
     const currentState = session.state;
 
@@ -302,8 +313,12 @@ export class ConversationService {
       return this.handleCancel(session);
     }
 
-    // Allow starting a new search from any interactive state
+    // Allow starting a new search from any interactive state - unless the message
+    // only reached us through the interactive-session filter bypass (no prefix /
+    // keyword). Such a message falls through to the state handler, which repeats
+    // the "reply with a number or CANCEL" hint instead of looping into a new search.
     if (
+      allowNewSearch &&
       intent.intent === 'media_request' &&
       currentState !== 'IDLE' &&
       currentState !== 'PROCESSING'
@@ -605,10 +620,9 @@ export class ConversationService {
       selectedResult.mediaStatus !== undefined &&
       selectedResult.mediaStatus >= 2
     ) {
-      return this.createResponse(
+      return this.resetToIdle(
         session,
-        this.buildAlreadyInSystemMessage(selectedResult, selectedResult.mediaStatus),
-        'AWAITING_SELECTION'
+        this.buildAlreadyInSystemMessage(selectedResult, selectedResult.mediaStatus)
       );
     }
 
@@ -671,13 +685,12 @@ export class ConversationService {
 
               // Every season is already available or requested — nothing new to ask for
               if (requestableSeasons.length === 0) {
-                return this.createResponse(
+                return this.resetToIdle(
                   session,
                   this.buildAlreadyInSystemMessage(
                     selectedResult,
                     selectedResult.mediaStatus ?? tvDetails.mediaInfo?.status ?? 5
-                  ),
-                  'AWAITING_SELECTION'
+                  )
                 );
               }
 
@@ -749,10 +762,9 @@ export class ConversationService {
 
     // Season info was unavailable, so fall back to the show-level status
     if (selectedResult.mediaStatus !== undefined && selectedResult.mediaStatus >= 2) {
-      return this.createResponse(
+      return this.resetToIdle(
         session,
-        this.buildAlreadyInSystemMessage(selectedResult, selectedResult.mediaStatus),
-        'AWAITING_SELECTION'
+        this.buildAlreadyInSystemMessage(selectedResult, selectedResult.mediaStatus)
       );
     }
 
@@ -1171,6 +1183,8 @@ export class ConversationService {
       searchResults: null,
       selectedResultIndex: null,
       selectedResult: null,
+      availableSeasons: null,
+      selectedSeasons: null,
     });
 
     return this.createResponse(session, message, 'IDLE');

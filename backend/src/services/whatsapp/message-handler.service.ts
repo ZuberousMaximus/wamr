@@ -109,19 +109,38 @@ class MessageHandlerService {
     message: string,
     phoneNumberHash: string,
     isFromMe = false
-  ): Promise<{ shouldProcess: boolean; cleanedMessage: string }> {
+  ): Promise<{ shouldProcess: boolean; cleanedMessage: string; allowNewSearch: boolean }> {
     // Contact allow-list. Checked before everything else - including the
     // interactive-session bypass below - so that removing someone from Contacts
     // cuts off an in-flight conversation rather than letting it run to
     // completion. Messages from the linked account itself are exempt, otherwise
     // the owner would be locked out of their own bot.
     if (!isFromMe && !(await this.isSenderAllowed(phoneNumberHash))) {
-      return { shouldProcess: false, cleanedMessage: message };
+      return { shouldProcess: false, cleanedMessage: message, allowNewSearch: false };
     }
 
     try {
-      // Check if user has an active session in interactive state
-      // If so, bypass filter to allow selection responses
+      // Get current connection and filter config
+      const connections = await whatsappConnectionRepository.findAll();
+      const filterType = connections[0]?.filterType;
+      const filterValue = connections[0]?.filterValue;
+
+      if (!filterType || !filterValue) {
+        // No filter configured, process all messages
+        return { shouldProcess: true, cleanedMessage: message, allowNewSearch: true };
+      }
+
+      // A message that passes the filter is addressed to the bot: strip the
+      // prefix/keyword and let it do anything, including start a new search.
+      const cleaned = this.applyMessageFilter(message, filterType, filterValue);
+      if (cleaned !== null) {
+        return { shouldProcess: true, cleanedMessage: cleaned, allowNewSearch: true };
+      }
+
+      // A session waiting for a reply lets the answer ("2", "yes", "cancel")
+      // through without the prefix. Such a message may only answer the open
+      // question - it must not start a new search, otherwise ordinary chat
+      // keeps restarting searches and the user can never leave the menu.
       const session = await conversationSessionRepository.findByPhoneHash(phoneNumberHash);
       if (
         session &&
@@ -132,83 +151,78 @@ class MessageHandlerService {
           'PROCESSING',
         ].includes(session.state)
       ) {
-        logger.debug('Bypassing filter for interactive session', {
+        logger.debug('Bypassing filter for interactive session (reply only)', {
           state: session.state,
           phoneHash: phoneNumberHash.slice(-4),
         });
-        return { shouldProcess: true, cleanedMessage: message };
+        return { shouldProcess: true, cleanedMessage: message, allowNewSearch: false };
       }
 
-      // Get current connection and filter config
-      const connections = await whatsappConnectionRepository.findAll();
-
-      if (connections.length === 0 || !connections[0].filterType) {
-        // No filter configured, process all messages
-        return { shouldProcess: true, cleanedMessage: message };
-      }
-
-      const { filterType, filterValue } = connections[0];
-
-      if (!filterValue) {
-        // No filter value set, process all messages
-        return { shouldProcess: true, cleanedMessage: message };
-      }
-
-      if (filterType === 'prefix') {
-        // Check if message starts with prefix (case-sensitive)
-        if (!message.startsWith(filterValue)) {
-          logger.debug('Message filtered: missing prefix', {
-            prefix: filterValue,
-            messageStart: message.substring(0, 10),
-          });
-          return { shouldProcess: false, cleanedMessage: message };
-        }
-
-        // Strip prefix from message
-        const cleaned = message.slice(filterValue.length).trim();
-        logger.debug('Message prefix stripped', {
-          prefix: filterValue,
-          original: message.substring(0, 20),
-          cleaned: cleaned.substring(0, 20),
-        });
-        return { shouldProcess: true, cleanedMessage: cleaned };
-      }
-
-      if (filterType === 'keyword') {
-        // Check if message contains keyword (case-insensitive)
-        const lowerMessage = message.toLowerCase();
-        const lowerKeyword = filterValue.toLowerCase();
-        const hasKeyword = lowerMessage.includes(lowerKeyword);
-
-        if (!hasKeyword) {
-          logger.debug('Message filtered: missing keyword', {
-            keyword: filterValue,
-          });
-          return { shouldProcess: false, cleanedMessage: message };
-        }
-
-        // Remove keyword from message (case-insensitive)
-        const keywordIndex = lowerMessage.indexOf(lowerKeyword);
-        const cleaned = (
-          message.substring(0, keywordIndex) + message.substring(keywordIndex + filterValue.length)
-        ).trim();
-
-        logger.debug('Message keyword removed', {
-          keyword: filterValue,
-          original: message.substring(0, 20),
-          cleaned: cleaned.substring(0, 20),
-        });
-
-        return { shouldProcess: true, cleanedMessage: cleaned };
-      }
-
-      // Unknown filter type, process message
-      return { shouldProcess: true, cleanedMessage: message };
+      return { shouldProcess: false, cleanedMessage: message, allowNewSearch: false };
     } catch (error) {
       logger.error({ err: error }, 'Error checking message filter');
       // On error, allow message through
-      return { shouldProcess: true, cleanedMessage: message };
+      return { shouldProcess: true, cleanedMessage: message, allowNewSearch: true };
     }
+  }
+
+  /**
+   * Apply the configured prefix/keyword filter.
+   * Returns the message with the prefix/keyword removed, or null if it doesn't match.
+   */
+  private applyMessageFilter(
+    message: string,
+    filterType: string,
+    filterValue: string
+  ): string | null {
+    if (filterType === 'prefix') {
+      // Check if message starts with prefix (case-sensitive)
+      if (!message.startsWith(filterValue)) {
+        logger.debug('Message filtered: missing prefix', {
+          prefix: filterValue,
+          messageStart: message.substring(0, 10),
+        });
+        return null;
+      }
+
+      // Strip prefix from message
+      const cleaned = message.slice(filterValue.length).trim();
+      logger.debug('Message prefix stripped', {
+        prefix: filterValue,
+        original: message.substring(0, 20),
+        cleaned: cleaned.substring(0, 20),
+      });
+      return cleaned;
+    }
+
+    if (filterType === 'keyword') {
+      // Check if message contains keyword (case-insensitive)
+      const lowerMessage = message.toLowerCase();
+      const lowerKeyword = filterValue.toLowerCase();
+      const keywordIndex = lowerMessage.indexOf(lowerKeyword);
+
+      if (keywordIndex === -1) {
+        logger.debug('Message filtered: missing keyword', {
+          keyword: filterValue,
+        });
+        return null;
+      }
+
+      // Remove keyword from message (case-insensitive)
+      const cleaned = (
+        message.substring(0, keywordIndex) + message.substring(keywordIndex + filterValue.length)
+      ).trim();
+
+      logger.debug('Message keyword removed', {
+        keyword: filterValue,
+        original: message.substring(0, 20),
+        cleaned: cleaned.substring(0, 20),
+      });
+      return cleaned;
+    }
+
+    // Unknown filter type, process message
+    return message;
   }
 
   /**
@@ -371,7 +385,7 @@ class MessageHandlerService {
       const phoneNumberHash = hashingService.hashPhoneNumber(sessionPhoneNumber);
 
       // Check if message should be processed based on filter configuration
-      const { shouldProcess, cleanedMessage } = await this.shouldProcessMessage(
+      const { shouldProcess, cleanedMessage, allowNewSearch } = await this.shouldProcessMessage(
         messageBody,
         phoneNumberHash,
         Boolean(message.key.fromMe)
@@ -394,7 +408,8 @@ class MessageHandlerService {
         cleanedMessage,
         fullJid, // Full JID for sending responses
         contactName,
-        contactPhoneNumber // Actual phone number for storage (undefined for self-messages)
+        contactPhoneNumber, // Actual phone number for storage (undefined for self-messages)
+        { allowNewSearch }
       );
 
       // Send response back to user using full JID

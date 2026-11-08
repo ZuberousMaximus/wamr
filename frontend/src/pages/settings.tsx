@@ -51,6 +51,7 @@ import { useContacts } from '../hooks/use-contacts';
 import { useAdminNotification } from '../hooks/use-admin-notification';
 import { useBackupCodesCount } from '../hooks/use-backup-codes';
 import type { AutoApprovalMode } from '../types/whatsapp.types';
+import { GroupRecapCard } from '../components/settings/group-recap-card';
 
 interface SystemInfo {
   version: string;
@@ -1104,6 +1105,9 @@ export default function SettingsPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Weekly Group Recap */}
+      <GroupRecapCard />
 
       {/* Request Quotas Settings */}
       <Card>

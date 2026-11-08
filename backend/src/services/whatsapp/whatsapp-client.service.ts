@@ -604,6 +604,20 @@ export class WhatsAppClientService {
   }
 
   /**
+   * List the groups the linked account is a member of
+   */
+  async listGroups(): Promise<{ id: string; name: string; size: number }[]> {
+    if (!this.sock || !this.isReady()) {
+      throw new Error('WhatsApp client is not ready');
+    }
+
+    const groups = await this.sock.groupFetchAllParticipating();
+    return Object.values(groups)
+      .map((g) => ({ id: g.id, name: g.subject || g.id, size: g.participants?.length ?? 0 }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /**
    * Send image to a recipient
    * @param recipient - Can be a full JID, phone number, or user ID
    * @param imageBuffer - Image data as Buffer

@@ -1,4 +1,4 @@
-import { eq, and, desc, gte, lte, sql } from 'drizzle-orm';
+import { eq, and, desc, gte, lt, lte, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { contactRepository } from './contact.repository.js';
 import { requestHistory } from '../db/schema.js';
@@ -87,6 +87,21 @@ export class RequestHistoryRepository {
       }
       // If no contact exists, keep the original database value (WhatsApp pushname)
     }
+  }
+
+  /**
+   * Requests created in [from, to), oldest first, with contact names resolved
+   */
+  async findCreatedBetween(fromIso: string, toIso: string): Promise<RequestHistoryModel[]> {
+    const rows = await db
+      .select()
+      .from(requestHistory)
+      .where(and(gte(requestHistory.createdAt, fromIso), lt(requestHistory.createdAt, toIso)))
+      .orderBy(requestHistory.createdAt);
+
+    const requests = rows.map((r) => this.mapToModel(r));
+    await this.attachContactNames(requests);
+    return requests;
   }
 
   /**

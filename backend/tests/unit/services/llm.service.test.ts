@@ -231,9 +231,7 @@ describe('LlmService', () => {
 
     it('should omit alternateQuery when no correction is offered', async () => {
       mockClient.post.mockResolvedValue(
-        completion(
-          llmPayload({ intent: 'media_request', mediaType: 'movie', query: 'Dune' })
-        )
+        completion(llmPayload({ intent: 'media_request', mediaType: 'movie', query: 'Dune' }))
       );
 
       const result = await new LlmService().parseIntent('add Dune');
@@ -378,6 +376,50 @@ describe('LlmService', () => {
       const result = await new LlmService().parseIntent('add Dune');
 
       expect(result).toBeNull();
+    });
+  });
+
+  describe('generateText', () => {
+    it('returns trimmed text and sends a free-form completion with a longer timeout', async () => {
+      mockClient.post.mockResolvedValue({
+        data: { choices: [{ message: { content: '  Recap time!  ' } }] },
+      });
+
+      const service = new LlmService();
+      const text = await service.generateText('system', 'user');
+
+      expect(text).toBe('Recap time!');
+      const [url, body, config] = mockClient.post.mock.calls[0];
+      expect(url).toBe('/chat/completions');
+      expect(body.response_format).toBeUndefined();
+      expect(body.messages).toEqual([
+        { role: 'system', content: 'system' },
+        { role: 'user', content: 'user' },
+      ]);
+      expect(config.timeout).toBe(30000);
+    });
+
+    it('truncates overly long output', async () => {
+      mockClient.post.mockResolvedValue({
+        data: { choices: [{ message: { content: 'a'.repeat(50) } }] },
+      });
+
+      const text = await new LlmService().generateText('s', 'u', { maxChars: 10 });
+
+      expect(text).toHaveLength(10);
+      expect(text?.endsWith('…')).toBe(true);
+    });
+
+    it('returns null on errors, empty output, or when disabled', async () => {
+      mockClient.post.mockRejectedValueOnce(new Error('boom'));
+      const service = new LlmService();
+      await expect(service.generateText('s', 'u')).resolves.toBeNull();
+
+      mockClient.post.mockResolvedValueOnce({ data: { choices: [{ message: { content: '' } }] } });
+      await expect(service.generateText('s', 'u')).resolves.toBeNull();
+
+      mockEnv.LLM_ENABLED = false;
+      await expect(new LlmService().generateText('s', 'u')).resolves.toBeNull();
     });
   });
 });

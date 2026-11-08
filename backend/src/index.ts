@@ -22,12 +22,14 @@ import systemRoutes from './api/routes/system.routes';
 import contactsRoutes from './api/routes/contacts.routes';
 import adminNotificationRoutes from './api/routes/admin-notification.routes';
 import broadcastRoutes from './api/routes/broadcast.routes';
+import groupRecapRoutes from './api/routes/group-recap.routes';
 import { whatsappClientService } from './services/whatsapp/whatsapp-client.service';
 import { qrCodeEmitterService } from './services/whatsapp/qr-code-emitter.service';
 import { whatsappSessionService } from './services/whatsapp/whatsapp-session.service';
 import { messageHandlerService } from './services/whatsapp/message-handler.service';
 import { mediaMonitoringService } from './services/media-monitoring/media-monitoring.service';
 import { broadcastSchedulerService } from './services/broadcast/broadcast-scheduler.service';
+import { groupRecapService } from './services/group-recap/group-recap.service';
 import { conversationSessionRepository } from './repositories/conversation-session.repository';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -133,6 +135,9 @@ function createApp(): Express {
   // Register broadcast routes
   app.use('/api/broadcasts', broadcastRoutes);
 
+  // Weekly group recap
+  app.use('/api/group-recap', groupRecapRoutes);
+
   // TODO: Register remaining route modules when created
   // app.use('/api/stats', statsRoutes);
 
@@ -191,6 +196,9 @@ async function startServer(): Promise<HttpServer> {
     // Start broadcast scheduler (polls for due/recurring sends)
     logger.info('Starting broadcast scheduler');
     broadcastSchedulerService.start();
+
+    // Weekly group recap (no-op until enabled in Settings)
+    groupRecapService.start();
 
     // Periodically clean up expired conversation sessions (every hour)
     setInterval(

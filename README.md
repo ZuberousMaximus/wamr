@@ -115,6 +115,7 @@ On first access, you'll be guided through a setup wizard to:
 - 🎬 **Media Request System** - Users can request movies and TV shows via WhatsApp
 - 🔄 **Service Integration** - Connect to Radarr, Sonarr, or Overseerr
 - 🧠 **Optional LLM Intent Parsing** - Point WAMR at Gemini, OpenAI or a local Ollama model for free-form requests, with automatic fallback to the built-in keyword parser (see [ENVIRONMENT.md](ENVIRONMENT.md#natural-language-intent-parsing-llm))
+- 🎉 **Weekly Group Recap** - A funny weekly recap of everyone's requests (or a movie quip on quiet weeks) posted to a WhatsApp group on a random day, with your own brief for the LLM (see [ENVIRONMENT.md](ENVIRONMENT.md#weekly-group-recap))
 - 📺 **Per-Season Requests** - Request further seasons of a show that is already partly in your library
 - 🙋 **Contact Allow-List** - Optionally reply only to numbers in Contacts
 - 📊 **Request Management** - Approve, reject, or auto-approve media requests

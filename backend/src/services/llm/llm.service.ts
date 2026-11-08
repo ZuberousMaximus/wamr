@@ -278,6 +278,59 @@ export class LlmService {
   }
 
   /**
+   * Generate free-form text (used by the group recap).
+   * Returns null when the LLM is unavailable, fails or returns nothing, so
+   * the caller can fall back to a template.
+   */
+  async generateText(
+    systemPrompt: string,
+    userPrompt: string,
+    options: { temperature?: number; maxChars?: number; timeoutMs?: number } = {}
+  ): Promise<string | null> {
+    if (!this.client) {
+      return null;
+    }
+
+    const started = Date.now();
+
+    try {
+      const response = await this.client.post(
+        '/chat/completions',
+        {
+          model: env.LLM_MODEL,
+          temperature: options.temperature ?? 0.9,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+        },
+        // Writing a paragraph takes longer than classifying one message
+        { timeout: options.timeoutMs ?? Math.max(env.LLM_TIMEOUT_MS, 30000) }
+      );
+
+      const content = response.data?.choices?.[0]?.message?.content;
+      if (typeof content !== 'string' || content.trim().length === 0) {
+        logger.warn({ durationMs: Date.now() - started }, 'LLM returned empty text');
+        return null;
+      }
+
+      const text = content.trim();
+      const maxChars = options.maxChars ?? 1500;
+      return text.length > maxChars ? `${text.slice(0, maxChars - 1).trimEnd()}…` : text;
+    } catch (error) {
+      logger.warn(
+        {
+          status: axios.isAxiosError(error) ? error.response?.status : undefined,
+          error: error instanceof Error ? error.message : String(error),
+          durationMs: Date.now() - started,
+        },
+        'LLM text generation failed'
+      );
+      return null;
+    }
+  }
+
+  /**
    * Map the flat model output onto the internal IntentResult shape
    */
   private toIntentResult(data: LlmIntent): IntentResult {

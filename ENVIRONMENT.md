@@ -347,6 +347,27 @@ LLM_MODEL=gpt-4o-mini
 is sent to that provider for classification. Contact names and phone numbers are
 not. Use Ollama if that tradeoff is not acceptable for your setup.
 
+### Weekly Group Recap
+
+Configured in **Settings → Group Recap** (no environment variables). Once a
+week (Monday-Sunday), on a random day and at a random time inside the posting
+window, WAMR posts to one WhatsApp group it is a member of:
+
+- If anyone made requests since the last recap, the LLM writes a short, funny
+  recap of them. Only first names and titles are sent to the LLM.
+- In a quiet week it writes a movie/TV quip instead.
+- If the LLM is off or fails, a plain list of the requests is posted, and a
+  quiet week is skipped.
+
+The optional brief is passed to the model for tone and topics. Use **Preview**
+to try a brief before you save it, and **Send Now** to post straight away
+(this doesn't change the weekly slot). A recap that comes due while the server
+is down is moved to a new slot instead of being posted outside the window.
+After 3 failed sends it waits until the next week.
+
+Times use the server's time zone (set `TZ` on the container, e.g.
+`TZ=Europe/London`). The card shows the zone that is in effect.
+
 ## Environment Variable Loading Order
 
 ### Backend (backend/src/config/environment.ts)

@@ -207,3 +207,51 @@ describe('WhatsAppClientService auto-reconnect', () => {
     expect(service.reconnectAttempts).toBe(1);
   });
 });
+
+/**
+ * Session clearing: the session dir is usually a bind mount whose parent the app
+ * can't write to, so we must empty it rather than remove it. Regression test for
+ * a 401 loop where fs.rm(dir) failed with EACCES and left revoked creds behind.
+ */
+describe('WhatsAppClientService clearSessionFiles', () => {
+  let tmpRoot: string;
+  let originalSessionPath: string;
+
+  beforeEach(async () => {
+    const os = await import('os');
+    const fs = await import('fs/promises');
+    const { env } = await import('../../../config/environment.js');
+    tmpRoot = await fs.mkdtemp(`${os.tmpdir()}/wamr-session-`);
+    originalSessionPath = env.WHATSAPP_SESSION_PATH;
+    (env as { WHATSAPP_SESSION_PATH: string }).WHATSAPP_SESSION_PATH = `${tmpRoot}/auth`;
+  });
+
+  afterEach(async () => {
+    const fs = await import('fs/promises');
+    const { env } = await import('../../../config/environment.js');
+    (env as { WHATSAPP_SESSION_PATH: string }).WHATSAPP_SESSION_PATH = originalSessionPath;
+    await fs.chmod(tmpRoot, 0o755);
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  const clear = (service: WhatsAppClientService) =>
+    (service as unknown as { clearSessionFiles: () => Promise<void> }).clearSessionFiles();
+
+  it('empties the directory even when its parent is not writable', async () => {
+    const fs = await import('fs/promises');
+    const authDir = `${tmpRoot}/auth`;
+    await fs.mkdir(`${authDir}/nested`, { recursive: true });
+    await fs.writeFile(`${authDir}/creds.json`, '{}');
+    await fs.writeFile(`${authDir}/nested/key.json`, '{}');
+    // Parent read-only, like root-owned /app above a bind-mounted /app/.baileys_auth.
+    await fs.chmod(tmpRoot, 0o555);
+
+    await clear(new WhatsAppClientService());
+
+    expect(await fs.readdir(authDir)).toEqual([]);
+  });
+
+  it('treats a missing directory as already cleared', async () => {
+    await expect(clear(new WhatsAppClientService())).resolves.toBeUndefined();
+  });
+});

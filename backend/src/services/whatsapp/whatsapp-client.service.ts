@@ -388,12 +388,16 @@ export class WhatsAppClientService {
 
             // Clear stale session files so next init generates a fresh QR code
             try {
-              const fs = await import('fs/promises');
-              const sessionPath = env.WHATSAPP_SESSION_PATH;
-              await fs.rm(sessionPath, { recursive: true, force: true });
-              logger.info({ sessionPath }, 'Cleared stale session files after logout');
+              await this.clearSessionFiles();
+              logger.info(
+                { sessionPath: env.WHATSAPP_SESSION_PATH },
+                'Cleared stale session files after logout'
+              );
             } catch (err) {
-              logger.warn({ err }, 'Failed to clear session files after logout');
+              logger.error(
+                { err, sessionPath: env.WHATSAPP_SESSION_PATH },
+                'Failed to clear session files after logout - reconnecting will reuse the revoked credentials until they are removed'
+              );
             }
           } else if (hadEstablishedSession || isRestartRequired) {
             void this.scheduleReconnect(statusCode, hadEstablishedSession, isRestartRequired);
@@ -737,6 +741,35 @@ export class WhatsAppClientService {
    * stop retries) and by the 'connection.open' handler (so a successful retry clears
    * the in-flight timer).
    */
+  /**
+   * Delete everything inside the session directory, but not the directory itself.
+   *
+   * The session directory is usually a bind mount (e.g. /app/.baileys_auth on Unraid)
+   * whose parent is root-owned while the app runs as a non-root user. Removing the
+   * directory itself then fails with EACCES (or EBUSY for a mount point), and
+   * fs.rm(dir, { recursive: true }) gives up before touching any of the files inside,
+   * leaving revoked credentials behind. Emptying the directory works in both layouts.
+   *
+   * Throws if any entry cannot be removed. A missing directory counts as cleared.
+   */
+  private async clearSessionFiles(): Promise<void> {
+    const fs = await import('fs/promises');
+    const path = await import('path');
+    const sessionPath = env.WHATSAPP_SESSION_PATH;
+
+    let entries: string[];
+    try {
+      entries = await fs.readdir(sessionPath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw err;
+    }
+
+    await Promise.all(
+      entries.map((entry) => fs.rm(path.join(sessionPath, entry), { recursive: true, force: true }))
+    );
+  }
+
   private cancelReconnect(): void {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -919,15 +952,21 @@ export class WhatsAppClientService {
       // Wait for socket to fully close
       await new Promise((resolve) => setTimeout(resolve, 2000));
 
-      // Delete session files
+      // Delete session files. If that fails, reinitializing would just restore the
+      // same failed session, so stop here instead of looping.
       const sessionPath = env.WHATSAPP_SESSION_PATH;
-      const fs = await import('fs/promises');
-
       try {
-        await fs.rm(sessionPath, { recursive: true, force: true });
-        logger.info({ sessionPath }, 'Deleted failed session directory');
+        await this.clearSessionFiles();
+        logger.info({ sessionPath }, 'Cleared failed session files');
       } catch (err) {
-        logger.warn({ err, sessionPath }, 'Failed to delete session directory (may not exist)');
+        logger.error(
+          { err, sessionPath },
+          'Failed to clear session files - not reinitializing, as it would reuse the failed session'
+        );
+        await this.updateConnectionStatus('DISCONNECTED');
+        const { qrCodeEmitterService } = await import('./qr-code-emitter.service.js');
+        qrCodeEmitterService.emitConnectionStatus('disconnected');
+        return;
       }
 
       // Wait a bit more before reinitializing
@@ -964,17 +1003,13 @@ export class WhatsAppClientService {
       logger.info('Waiting for socket to release file locks...');
       await new Promise((resolve) => setTimeout(resolve, 2000));
 
-      // Then delete session files
-      const sessionPath = env.WHATSAPP_SESSION_PATH;
-      const fs = await import('fs/promises');
-
-      // Try multiple times with exponential backoff if busy
+      // Then delete session files, retrying with exponential backoff if busy
       let attempts = 0;
       const maxAttempts = 5;
 
       while (attempts < maxAttempts) {
         try {
-          await fs.rm(sessionPath, { recursive: true, force: true });
+          await this.clearSessionFiles();
           logger.info('WhatsApp session files deleted after logout');
           break;
         } catch (err: any) {
@@ -1090,16 +1125,11 @@ export class WhatsAppClientService {
       // Wait for socket to fully close
       await new Promise((resolve) => setTimeout(resolve, 2000));
 
-      // Delete session files
+      // Delete session files. A failure is rethrown (via the outer catch) so the
+      // caller sees it instead of a false "cleared successfully".
       const sessionPath = env.WHATSAPP_SESSION_PATH;
-      const fs = await import('fs/promises');
-
-      try {
-        await fs.rm(sessionPath, { recursive: true, force: true });
-        logger.info({ sessionPath }, 'Deleted WhatsApp session directory');
-      } catch (err) {
-        logger.warn({ err, sessionPath }, 'Failed to delete session directory (may not exist)');
-      }
+      await this.clearSessionFiles();
+      logger.info({ sessionPath }, 'Cleared WhatsApp session files');
 
       // Update database status
       await this.updateConnectionStatus('DISCONNECTED');
